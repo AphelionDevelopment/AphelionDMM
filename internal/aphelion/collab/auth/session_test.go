@@ -119,6 +119,68 @@ func TestManagerReauthorizesRoleForSpecificCollaborationSession(t *testing.T) {
 	}
 }
 
+func TestManagerDerivesStableActorAcrossProcessRestart(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(5000, 0).UTC()
+	identity := Identity{Issuer: "https://issuer.example", Subject: "stable-subject", DisplayName: "Mapper", ExpiresAt: now.Add(time.Hour)}
+	directory := &fakeDirectory{role: RoleViewer}
+	first := NewManager(&fakeFlow{identity: identity}, directory, ManagerConfig{Now: func() time.Time { return now }})
+	second := NewManager(&fakeFlow{identity: identity}, directory, ManagerConfig{Now: func() time.Time { return now }})
+	firstBegin, err := first.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBegin, err := second.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSession, err := first.Complete(context.Background(), firstBegin.State, "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSession, err := second.Complete(context.Background(), secondBegin.State, "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSession.ActorID != secondSession.ActorID {
+		t.Fatalf("actor IDs differ across restart: %q and %q", firstSession.ActorID, secondSession.ActorID)
+	}
+}
+
+func TestManagerBoundsPendingAuthorizationsAndActiveSessions(t *testing.T) {
+	now := time.Unix(6000, 0).UTC()
+	flow := &fakeFlow{identity: Identity{Issuer: "https://issuer.example", Subject: "bounded-subject", DisplayName: "Mapper", ExpiresAt: now.Add(time.Hour)}}
+	directory := &fakeDirectory{role: RoleViewer}
+	manager := NewManager(flow, directory, ManagerConfig{Now: func() time.Time { return now }, PendingTTL: time.Minute, MaxPending: 1, MaxSessions: 1})
+	first, err := manager.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Begin(context.Background()); !errors.Is(err, ErrAuthenticationCapacity) {
+		t.Fatalf("pending capacity error = %v", err)
+	}
+	if _, err := manager.Complete(context.Background(), first.State, "code"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Complete(context.Background(), second.State, "code"); !errors.Is(err, ErrAuthenticationCapacity) {
+		t.Fatalf("session capacity error = %v", err)
+	}
+	now = now.Add(2 * time.Hour)
+	third, err := manager.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow.identity.ExpiresAt = now.Add(time.Hour)
+	if _, err := manager.Complete(context.Background(), third.State, "code"); err != nil {
+		t.Fatalf("completion after expired-session cleanup: %v", err)
+	}
+}
+
 type fakeFlow struct {
 	identity Identity
 	state    string

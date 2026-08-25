@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,6 +95,25 @@ func TestHTTPHealthAndVersion(t *testing.T) {
 		_ = response.Body.Close()
 	}
 }
+
+func TestReadyFailsWhenDurableStoreIsUnavailable(t *testing.T) {
+	store := &failingReadinessStore{SessionStore: NewMemoryStore(), err: errors.New("database unavailable")}
+	service := NewService(ServiceConfig{Store: store})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	request := httptest.NewRequest(http.MethodGet, "/v1/health/ready", nil)
+	response := httptest.NewRecorder()
+	service.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d", response.Code)
+	}
+}
+
+type failingReadinessStore struct {
+	SessionStore
+	err error
+}
+
+func (store *failingReadinessStore) Ready(context.Context) error { return store.err }
 
 func TestHTTPVersionPublishesCompatibilityMatrix(t *testing.T) {
 	t.Parallel()

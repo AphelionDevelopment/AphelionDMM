@@ -5,7 +5,67 @@ info:
   description: Version 1 lifecycle and snapshot contract. Filesystem paths and process commands are never accepted.
 servers:
   - url: http://127.0.0.1
+  - url: https://collaboration.example
 paths:
+  /v1/auth/begin:
+    post:
+      summary: Begin hosted OIDC authentication
+      operationId: beginHostedAuthentication
+      security: []
+      responses:
+        '200':
+          description: OIDC authorization URL containing the one-use state value
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedAuthBegin' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/auth/complete:
+    get:
+      summary: Complete hosted OIDC authentication
+      operationId: completeHostedAuthentication
+      security: []
+      parameters:
+        - { name: state, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 512 } }
+        - { name: code, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 4096 } }
+      responses:
+        '200':
+          description: Short-lived hosted authentication session
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedAuthentication' }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/auth/logout:
+    post:
+      summary: End a hosted authentication session
+      operationId: logoutHostedAuthentication
+      security: [{ bearerToken: [] }]
+      responses:
+        '204': { description: Hosted authentication session removed }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/hosted/sessions:
+    post:
+      summary: Create a durable hosted collaboration session
+      operationId: createHostedSession
+      security: [{ bearerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSessionRequest' }
+      responses:
+        '201':
+          description: Durable hosted session created with the authenticated identity as owner
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedSessionResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /v1/sessions:
     post:
       operationId: createSession
@@ -52,6 +112,44 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/JoinToken' }
         '403': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}/hosted-invitations:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    post:
+      summary: Create a one-use hosted invitation
+      operationId: createHostedInvitation
+      security: [{ bearerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHostedInvitationRequest' }
+      responses:
+        '201':
+          description: One-use hosted invitation. The raw token is returned only in this response.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedInvitation' }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}/hosted-invitations/redeem:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    post:
+      summary: Redeem a one-use hosted invitation
+      operationId: redeemHostedInvitation
+      security: [{ bearerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemHostedInvitationRequest' }
+      responses:
+        '200':
+          description: Hosted membership created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedMembership' }
+        '401': { $ref: '#/components/responses/Error' }
   /v1/sessions/{session_id}/snapshot:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     get:
@@ -95,7 +193,7 @@ paths:
       operationId: getReadiness
       responses:
         '200': { $ref: '#/components/responses/Health' }
-        '503': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/ReadinessUnavailable' }
   /v1/version:
     get:
       operationId: getVersion
@@ -131,6 +229,17 @@ components:
             required: [status]
             properties:
               status: { type: string, enum: [ok] }
+    ReadinessUnavailable:
+      description: Durable store or retained document recovery is unavailable
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [status]
+            properties:
+              status: { type: string, const: unavailable }
+              unrecoverable_documents: { type: integer, minimum: 1 }
   schemas:
     SHA256:
       type: string
@@ -155,6 +264,58 @@ components:
         map_hash: { $ref: '#/components/schemas/SHA256' }
         owner_token: { type: string, minLength: 1, maxLength: 128 }
         owner_token_expires_at: { type: string, format: date-time }
+    HostedSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session_id, document_id, revision, map_hash]
+      properties:
+        session_id: { type: string, minLength: 1, maxLength: 128 }
+        document_id: { type: string, format: uuid }
+        revision: { type: integer, minimum: 0 }
+        map_hash: { $ref: '#/components/schemas/SHA256' }
+    HostedAuthBegin:
+      type: object
+      additionalProperties: false
+      required: [authorization_url]
+      properties:
+        authorization_url: { type: string, format: uri, maxLength: 8192 }
+    HostedAuthentication:
+      type: object
+      additionalProperties: false
+      required: [token, actor_id, display_name, expires_at]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 128 }
+        actor_id: { type: string, format: uuid }
+        display_name: { type: string, minLength: 1, maxLength: 128 }
+        expires_at: { type: string, format: date-time }
+    CreateHostedInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role: { type: string, enum: [viewer, editor] }
+    HostedInvitation:
+      type: object
+      additionalProperties: false
+      required: [token, role, expires_at]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 128 }
+        role: { type: string, enum: [viewer, editor] }
+        expires_at: { type: string, format: date-time }
+    RedeemHostedInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 128 }
+    HostedMembership:
+      type: object
+      additionalProperties: false
+      required: [session_id, actor_id, role]
+      properties:
+        session_id: { type: string, minLength: 1, maxLength: 128 }
+        actor_id: { type: string, format: uuid }
+        role: { type: string, enum: [viewer, editor] }
     Session:
       type: object
       additionalProperties: false

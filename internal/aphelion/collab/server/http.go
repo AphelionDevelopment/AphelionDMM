@@ -19,6 +19,7 @@ import (
 	"sdmm/internal/aphelion/collab/compat"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
+	collabstore "sdmm/internal/aphelion/collab/store"
 	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
@@ -44,12 +45,20 @@ type ServiceConfig struct {
 	Now                           func() time.Time
 	Compatibility                 compat.Matrix
 	HostedAuth                    HostedSessionAuthorizer
+	HostedLogin                   HostedLoginManager
+	HostedRegistry                collabstore.HostedRegistry
 	HostedReauthorizationInterval time.Duration
 }
 
 type HostedSessionAuthorizer interface {
 	Authorize(context.Context, string) (auth.Session, error)
 	AuthorizeSession(context.Context, string, string) (auth.Session, error)
+}
+
+type HostedLoginManager interface {
+	Begin(context.Context) (auth.BeginResult, error)
+	Complete(context.Context, string, string) (auth.Session, error)
+	Logout(string)
 }
 
 type CreateSessionResponse struct {
@@ -243,10 +252,16 @@ func (service *Service) routes() {
 	service.server.HandleFunc("GET /v1/health/live", service.handleLive)
 	service.server.HandleFunc("GET /v1/health/ready", service.handleReady)
 	service.server.HandleFunc("GET /v1/version", service.handleVersion)
+	service.server.HandleFunc("POST /v1/auth/begin", service.handleHostedAuthBegin)
+	service.server.HandleFunc("GET /v1/auth/complete", service.handleHostedAuthComplete)
+	service.server.HandleFunc("POST /v1/auth/logout", service.handleHostedAuthLogout)
 	service.server.HandleFunc("POST /v1/sessions", service.handleCreateSession)
+	service.server.HandleFunc("POST /v1/hosted/sessions", service.handleCreateHostedSession)
 	service.server.HandleFunc("GET /v1/sessions/{session_id}", service.handleGetSession)
 	service.server.HandleFunc("GET /v1/sessions/{session_id}/snapshot", service.handleGetSnapshot)
 	service.server.HandleFunc("POST /v1/sessions/{session_id}/join-tokens", service.handleCreateJoinToken)
+	service.server.HandleFunc("POST /v1/sessions/{session_id}/hosted-invitations", service.handleCreateHostedInvitation)
+	service.server.HandleFunc("POST /v1/sessions/{session_id}/hosted-invitations/redeem", service.handleRedeemHostedInvitation)
 	service.server.HandleFunc("POST /v1/sessions/{session_id}/exports", service.handleExport)
 	service.server.HandleFunc("GET /v1/collaboration", service.handleWebSocket)
 }
@@ -255,13 +270,19 @@ func (service *Service) handleLive(writer http.ResponseWriter, _ *http.Request) 
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (service *Service) handleReady(writer http.ResponseWriter, _ *http.Request) {
+func (service *Service) handleReady(writer http.ResponseWriter, request *http.Request) {
 	service.mutex.RLock()
 	unavailable := len(service.recoveryErrors)
 	service.mutex.RUnlock()
 	if unavailable > 0 {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "unrecoverable_documents": unavailable})
 		return
+	}
+	if readiness, ok := service.store.(interface{ Ready(context.Context) error }); ok {
+		if err := readiness.Ready(request.Context()); err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -284,6 +305,7 @@ func (service *Service) handleVersion(writer http.ResponseWriter, _ *http.Reques
 }
 
 func (service *Service) handleCreateSession(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
 	token := bearerToken(request)
 	launch, exists := service.launchToken(token)
 	if !exists {
@@ -418,6 +440,7 @@ func (service *Service) handleGetSnapshot(writer http.ResponseWriter, request *h
 }
 
 func (service *Service) handleCreateJoinToken(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
 	sessionID := request.PathValue("session_id")
 	authToken, _, ok := service.authorizeRecord(request, sessionID)
 	if !ok || authToken.resumption || !authToken.principal.CanAdminister() {

@@ -1,13 +1,69 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 )
+
+func NewTrustedProxyHandler(next http.Handler, trustedCIDRs []string) (http.Handler, error) {
+	if next == nil {
+		return nil, fmt.Errorf("trusted proxy handler is nil")
+	}
+	trusted := make([]*net.IPNet, 0, len(trustedCIDRs))
+	for _, value := range trustedCIDRs {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse trusted proxy CIDR %q: %w", value, err)
+		}
+		trusted = append(trusted, network)
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if forwarded := forwardedClientIP(request, trusted); forwarded != nil {
+			request.RemoteAddr = net.JoinHostPort(forwarded.String(), "0")
+		}
+		next.ServeHTTP(writer, request)
+	}), nil
+}
+
+func forwardedClientIP(request *http.Request, trusted []*net.IPNet) net.IP {
+	peer := net.ParseIP(remoteIP(request))
+	if peer == nil || !containsIP(trusted, peer) {
+		return nil
+	}
+	values := strings.Split(request.Header.Get("X-Forwarded-For"), ",")
+	forwarded := make([]net.IP, 0, len(values))
+	for _, value := range values {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		if ip == nil {
+			return nil
+		}
+		forwarded = append(forwarded, ip)
+	}
+	for index := len(forwarded) - 1; index >= 0; index-- {
+		if !containsIP(trusted, forwarded[index]) {
+			return forwarded[index]
+		}
+	}
+	if len(forwarded) > 0 {
+		return forwarded[0]
+	}
+	return nil
+}
+
+func containsIP(networks []*net.IPNet, ip net.IP) bool {
+	for index := range networks {
+		if networks[index].Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	CloseSlowConsumer websocket.StatusCode = 4408

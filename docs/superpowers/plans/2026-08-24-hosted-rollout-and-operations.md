@@ -88,8 +88,8 @@
 - [x] Define recovery point and recovery time targets for the pilot: at most five minutes of unacknowledged exposure and a 60-minute service restoration target. Acknowledged operations remain governed by transaction durability.
 - [x] Add an automated restore test that loads a logical backup into an empty database, opens the collaboration store, replays, and confirms document revisions/hashes. Full service startup is covered separately by the container fixture gate.
 - [x] Test restoration to a point before and after a known operation and record the expected visible revision.
-- [ ] Document pre-migration backup, migration lock, compatibility window, rollback/roll-forward decision, and integrity queries.
-- [ ] Ensure backup commands read secrets from the deployment secret mechanism and redact output.
+- [x] Document pre-migration backup, migration lock, compatibility window, rollback/roll-forward decision, and integrity queries.
+- [x] Ensure backup commands read secrets from the deployment secret mechanism and redact output.
 - [x] Run a timed restore rehearsal and record actual duration/artifact hashes.
 - [ ] If authorized, commit with `ops: document and test collaboration recovery`.
 
@@ -134,9 +134,9 @@
 - Modify after approval: `.github/workflows/ci.yml`
 - Modify after approval: release/signing configuration identified during execution
 
-- [ ] Threat-model authentication, invitation leakage, WebSocket abuse, operation amplification, map payload bombs, SQL abuse, SSRF, path escape, command execution, secret leakage, dependency compromise, updater compromise, backup theft, and denial of service.
-- [ ] Verify every mitigation through a test, configuration assertion, or operational control with an owner and evidence reference.
-- [ ] Obtain exact-file approval, then add protected CI/release gates for protocol compatibility, PostgreSQL integration, image scan, signed artifacts, and reproducible service build.
+- [x] Threat-model authentication, invitation leakage, WebSocket abuse, operation amplification, map payload bombs, SQL abuse, SSRF, path escape, command execution, secret leakage, dependency compromise, updater compromise, backup theft, and denial of service.
+- [x] Verify every implemented mitigation through a test, configuration assertion, or operational control with an owner and evidence reference; explicitly list remaining gaps.
+- [ ] Add protected CI/release gates for protocol compatibility, PostgreSQL integration, image scan, signed artifacts, and reproducible service build. Compatibility, PostgreSQL, vulnerability, and image gates are present; artifact signing remains.
 - [ ] Run an internal loopback pilot, then a private hosted pilot with named invited users, then a wider opt-in pilot. Keep public discovery disabled.
 - [ ] Require successful backup/restore rehearsal, load/fault gate, OIDC revocation test, cross-repository integration gate, and rollback rehearsal before each expansion.
 - [ ] Record pilot incidents, p50/p95/p99 acknowledgement latency, reconnect rate, conflicts, store health, and recovery evidence. Stop expansion on data loss, divergence, authorization bypass, or unrecoverable compatibility failure.
@@ -144,8 +144,8 @@
 
 ## Phase acceptance
 
-- [ ] PostgreSQL passes the same conformance/hash suite as SQLite.
-- [ ] OIDC and roles resist token, issuer, audience, nonce, expiry, and revocation failures.
+- [x] PostgreSQL passes the same conformance/hash suite as SQLite.
+- [x] OIDC and roles resist token, issuer, audience, nonce, expiry, and revocation failures in automated tests; live provider exercise remains.
 - [ ] The container runs non-root with immutable configuration and no embedded secrets.
 - [ ] Backup restoration meets the pilot recovery targets and exact map hashes.
 - [ ] Supported rolling versions maintain contiguous revisions; incompatible versions fail before join.

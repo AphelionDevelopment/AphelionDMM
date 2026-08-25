@@ -18,6 +18,7 @@ database:
 oidc:
   issuer: "https://identity.example.test"
   client_id: "apheliondmm"
+  redirect_url: "https://maps.example.test/v1/auth/complete"
   client_secret:
     environment: "APHELIONDMM_OIDC_CLIENT_SECRET"
 limits:
@@ -39,6 +40,18 @@ func TestLoadHostedConfigAcceptsStrictValidConfiguration(t *testing.T) {
 	}
 	if config.Limits.MaxConnections != 64 || len(config.TrustedProxyCIDRs) != 1 {
 		t.Fatalf("config limits/proxies = %#v", config)
+	}
+}
+
+func TestLoadHostedConfigRequiresHTTPSOIDCRedirectURL(t *testing.T) {
+	tests := []string{
+		strings.Replace(validHostedYAML, "  redirect_url: \"https://maps.example.test/v1/auth/complete\"\n", "", 1),
+		strings.Replace(validHostedYAML, "https://maps.example.test/v1/auth/complete", "http://maps.example.test/v1/auth/complete", 1),
+	}
+	for index, data := range tests {
+		if _, err := LoadHostedConfig(strings.NewReader(data)); err == nil {
+			t.Errorf("test %d LoadHostedConfig() error = nil", index)
+		}
 	}
 }
 

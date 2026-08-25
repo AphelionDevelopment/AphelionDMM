@@ -129,6 +129,79 @@ jobs:
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeServer$' -fuzztime=5s
 
+  hosted-collaboration-gates:
+    name: Hosted Collaboration Gates
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        env:
+          POSTGRES_DB: aphelion_ci
+          POSTGRES_PASSWORD: aphelion_ci_only
+          POSTGRES_USER: aphelion_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aphelion_ci -d aphelion_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APHELION_POSTGRES_TEST_DSN: postgres://aphelion_ci:aphelion_ci_only@127.0.0.1:5432/aphelion_ci?sslmode=disable
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        run: |
+          sudo apt clean
+          sudo apt update
+          sudo apt install xorg-dev libgtk-3-dev postgresql-client
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+
+      - name: PostgreSQL Conformance and Restore
+        run: |
+          export APHELION_POSTGRES_BIN="$(dirname "$(command -v pg_dump)")"
+          go test ./internal/aphelion/collab/store/postgres -count=1 -v
+
+      - name: Hosted Authentication and Configuration
+        run: go test -race ./internal/aphelion/collab/auth ./internal/aphelion/collab/server -count=1
+
+      - name: Protocol and Load Compatibility
+        run: |
+          go test ./internal/aphelion/collab/compat ./internal/aphelion/collab/load ./cmd/apheliondmm-compat ./cmd/apheliondmm-loadtest -count=1
+          go test -tags=pilot ./internal/aphelion/collab/load -run '^TestPilotScenarioThroughPublicContracts$' -count=1 -timeout=60s -v
+
+      - name: Reachable Vulnerability Gate
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
+      - name: Build Hardened Hosted Image
+        run: |
+          docker build \
+            --file deploy/container/Dockerfile \
+            --build-arg APHELIONDMM_BUILD=ci \
+            --build-arg APHELIONDMM_REVISION="${GITHUB_SHA}" \
+            --tag apheliondmm-hosted:ci \
+            .
+
+      - name: Scan Hosted Image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: apheliondmm-hosted:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          scanners: vuln,secret,misconfig
+
   toolset-integration-contracts:
     name: Toolset Integration Contracts
     runs-on: windows-latest

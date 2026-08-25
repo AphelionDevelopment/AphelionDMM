@@ -86,6 +86,18 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
+func (store *Store) Ready(ctx context.Context) error {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return collabstore.ErrStoreClosed
+	}
+	if err := store.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("check PostgreSQL readiness: %w", err)
+	}
+	return nil
+}
+
 func (store *Store) Create(ctx context.Context, snapshot model.Snapshot) error {
 	store.mutex.RLock()
 	defer store.mutex.RUnlock()

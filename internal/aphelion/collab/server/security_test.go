@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,27 @@ import (
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
 )
+
+func TestTrustedProxyHandlerUsesForwardedAddressOnlyFromTrustedPeer(t *testing.T) {
+	var observed []string
+	handler, err := NewTrustedProxyHandler(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		observed = append(observed, remoteIP(request))
+	}), []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := httptest.NewRequest(http.MethodGet, "http://example.test", nil)
+	trusted.RemoteAddr = "10.1.2.3:1234"
+	trusted.Header.Set("X-Forwarded-For", "203.0.113.8, 10.2.3.4")
+	handler.ServeHTTP(httptest.NewRecorder(), trusted)
+	untrusted := httptest.NewRequest(http.MethodGet, "http://example.test", nil)
+	untrusted.RemoteAddr = "192.0.2.4:1234"
+	untrusted.Header.Set("X-Forwarded-For", "203.0.113.9")
+	handler.ServeHTTP(httptest.NewRecorder(), untrusted)
+	if !reflect.DeepEqual(observed, []string{"203.0.113.8", "192.0.2.4"}) {
+		t.Fatalf("observed remote addresses = %v", observed)
+	}
+}
 
 func TestServiceCopiesImmutableSecurityLimits(t *testing.T) {
 	t.Parallel()

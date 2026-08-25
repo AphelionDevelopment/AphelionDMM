@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +26,8 @@ func TestLogicalBackupRestoresExactRevisionAndHashBeforeAndAfterOperation(t *tes
 	if binaryDirectory == "" {
 		t.Skip("APHELION_POSTGRES_BIN is not configured")
 	}
-	pgDump := filepath.Join(binaryDirectory, "pg_dump.exe")
-	pgRestore := filepath.Join(binaryDirectory, "pg_restore.exe")
+	pgDump := filepath.Join(binaryDirectory, postgresExecutable(runtime.GOOS, "pg_dump"))
+	pgRestore := filepath.Join(binaryDirectory, postgresExecutable(runtime.GOOS, "pg_restore"))
 	for _, path := range []string{pgDump, pgRestore} {
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 			t.Fatalf("PostgreSQL backup tool %q is unavailable", path)
@@ -60,6 +61,22 @@ func TestLogicalBackupRestoresExactRevisionAndHashBeforeAndAfterOperation(t *tes
 	}
 	t.Logf("restore before: duration=%s artifact_sha256=%s revision=%d map_hash=%s", before.duration, before.artifactHash, before.revision, before.mapHash)
 	t.Logf("restore after: duration=%s artifact_sha256=%s revision=%d map_hash=%s", after.duration, after.artifactHash, after.revision, after.mapHash)
+}
+
+func TestPostgresExecutableUsesPlatformSuffix(t *testing.T) {
+	if value := postgresExecutable("windows", "pg_dump"); value != "pg_dump.exe" {
+		t.Fatalf("Windows executable = %q", value)
+	}
+	if value := postgresExecutable("linux", "pg_dump"); value != "pg_dump" {
+		t.Fatalf("Linux executable = %q", value)
+	}
+}
+
+func postgresExecutable(goos, name string) string {
+	if goos == "windows" {
+		return name + ".exe"
+	}
+	return name
 }
 
 type restoreEvidence struct {

@@ -17,6 +17,7 @@ import (
 type OIDCConfig struct {
 	Issuer                string
 	ClientID              string
+	ClientSecret          string
 	RedirectURL           string
 	HTTPClient            *http.Client
 	AllowInsecureLoopback bool
@@ -48,7 +49,7 @@ func NewOIDCFlow(ctx context.Context, config OIDCConfig) (*OIDCFlow, error) {
 		return nil, fmt.Errorf("discover OIDC provider: %w", err)
 	}
 	return &OIDCFlow{
-		oauth:    oauth2.Config{ClientID: config.ClientID, Endpoint: provider.Endpoint(), RedirectURL: config.RedirectURL, Scopes: []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail}},
+		oauth:    oauth2.Config{ClientID: config.ClientID, ClientSecret: config.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: config.RedirectURL, Scopes: []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail}},
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.ClientID}),
 		client:   client,
 	}, nil

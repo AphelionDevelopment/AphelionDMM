@@ -9,12 +9,15 @@ import (
 )
 
 const (
-	postgresSchemaVersion = 1
+	postgresSchemaVersion = 2
 	migrationLockID       = 0x415048454c494f4e
 )
 
 //go:embed schema/001_initial.sql
 var initialSchema string
+
+//go:embed schema/002_hosted_registry.sql
+var hostedRegistrySchema string
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	transaction, err := pool.Begin(ctx)
@@ -41,6 +44,14 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 		if _, err := transaction.Exec(ctx, "INSERT INTO collaboration_schema_migrations(version) VALUES(1)"); err != nil {
 			return fmt.Errorf("record initial PostgreSQL schema: %w", err)
+		}
+	}
+	if version < 2 {
+		if _, err := transaction.Exec(ctx, hostedRegistrySchema); err != nil {
+			return fmt.Errorf("apply hosted registry schema: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, "INSERT INTO collaboration_schema_migrations(version) VALUES(2)"); err != nil {
+			return fmt.Errorf("record hosted registry schema: %w", err)
 		}
 	}
 	if err := transaction.Commit(ctx); err != nil {

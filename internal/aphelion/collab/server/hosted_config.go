@@ -44,6 +44,7 @@ type HostedDatabase struct {
 type HostedOIDC struct {
 	Issuer       string       `yaml:"issuer"`
 	ClientID     string       `yaml:"client_id"`
+	RedirectURL  string       `yaml:"redirect_url"`
 	ClientSecret SecretSource `yaml:"client_secret"`
 }
 
@@ -104,6 +105,9 @@ func (config *HostedConfig) validate() error {
 	}
 	if strings.TrimSpace(config.OIDC.ClientID) == "" || len(config.OIDC.ClientID) > protocol.MaxIdentifierBytes {
 		return fmt.Errorf("OIDC client ID is required and must be at most %d bytes", protocol.MaxIdentifierBytes)
+	}
+	if err := validateOIDCRedirect(config.PublicOrigin, config.OIDC.RedirectURL); err != nil {
+		return err
 	}
 	if err := config.OIDC.ClientSecret.validate("OIDC client secret"); err != nil {
 		return err
@@ -195,6 +199,18 @@ func validateHTTPSOrigin(name, value string) error {
 	}
 	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return fmt.Errorf("%s must be an HTTPS origin without credentials, path, query, or fragment", name)
+	}
+	return nil
+}
+
+func validateOIDCRedirect(publicOrigin, value string) error {
+	redirect, err := url.Parse(value)
+	if err != nil || redirect.Scheme != "https" || redirect.Host == "" || redirect.User != nil || redirect.RawQuery != "" || redirect.Fragment != "" {
+		return fmt.Errorf("OIDC redirect URL must be an HTTPS URL without credentials, query, or fragment")
+	}
+	public, err := url.Parse(publicOrigin)
+	if err != nil || !strings.EqualFold(redirect.Scheme, public.Scheme) || !strings.EqualFold(redirect.Host, public.Host) || redirect.Path != "/v1/auth/complete" {
+		return fmt.Errorf("OIDC redirect URL must be the public origin /v1/auth/complete endpoint")
 	}
 	return nil
 }

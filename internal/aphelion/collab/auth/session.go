@@ -10,15 +10,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"sdmm/internal/aphelion/collab/model"
 )
 
 var (
-	ErrInvalidState     = errors.New("OIDC authorization state is invalid or expired")
-	ErrInvalidSession   = errors.New("hosted authentication session is invalid or expired")
-	ErrDisabledIdentity = errors.New("hosted identity is disabled")
+	ErrInvalidState           = errors.New("OIDC authorization state is invalid or expired")
+	ErrInvalidSession         = errors.New("hosted authentication session is invalid or expired")
+	ErrDisabledIdentity       = errors.New("hosted identity is disabled")
+	ErrAuthenticationCapacity = errors.New("hosted authentication capacity is exhausted")
+)
+
+const (
+	defaultMaxPending  = 4096
+	defaultMaxSessions = 16384
 )
 
 type Role string
@@ -51,6 +58,8 @@ type SessionDirectory interface {
 
 type ManagerConfig struct {
 	PendingTTL       time.Duration
+	MaxPending       int
+	MaxSessions      int
 	Now              func() time.Time
 	SessionDirectory SessionDirectory
 }
@@ -82,10 +91,11 @@ type Manager struct {
 	directory        Directory
 	sessionDirectory SessionDirectory
 	pendingTTL       time.Duration
+	maxPending       int
+	maxSessions      int
 	now              func() time.Time
 	pending          map[[sha256.Size]byte]pendingAuthorization
 	sessions         map[[sha256.Size]byte]Session
-	actors           map[string]model.ActorID
 }
 
 func NewManager(flow AuthorizationFlow, directory Directory, config ManagerConfig) *Manager {
@@ -95,9 +105,15 @@ func NewManager(flow AuthorizationFlow, directory Directory, config ManagerConfi
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.MaxPending <= 0 {
+		config.MaxPending = defaultMaxPending
+	}
+	if config.MaxSessions <= 0 {
+		config.MaxSessions = defaultMaxSessions
+	}
 	return &Manager{
-		flow: flow, directory: directory, sessionDirectory: config.SessionDirectory, pendingTTL: config.PendingTTL, now: config.Now,
-		pending: make(map[[sha256.Size]byte]pendingAuthorization), sessions: make(map[[sha256.Size]byte]Session), actors: make(map[string]model.ActorID),
+		flow: flow, directory: directory, sessionDirectory: config.SessionDirectory, pendingTTL: config.PendingTTL, maxPending: config.MaxPending, maxSessions: config.MaxSessions, now: config.Now,
+		pending: make(map[[sha256.Size]byte]pendingAuthorization), sessions: make(map[[sha256.Size]byte]Session),
 	}
 }
 
@@ -115,6 +131,11 @@ func (manager *Manager) Begin(context.Context) (BeginResult, error) {
 	}
 	verifier := oauth2.GenerateVerifier()
 	manager.mutex.Lock()
+	manager.cleanupPending(manager.now())
+	if len(manager.pending) >= manager.maxPending {
+		manager.mutex.Unlock()
+		return BeginResult{}, ErrAuthenticationCapacity
+	}
 	manager.pending[sha256.Sum256([]byte(state))] = pendingAuthorization{nonce: nonce, verifier: verifier, expiresAt: manager.now().Add(manager.pendingTTL)}
 	manager.mutex.Unlock()
 	return BeginResult{AuthorizationURL: manager.flow.AuthorizationURL(state, nonce, verifier), State: state}, nil
@@ -148,24 +169,37 @@ func (manager *Manager) Complete(ctx context.Context, state, code string) (Sessi
 	if err != nil {
 		return Session{}, err
 	}
-	manager.mutex.Lock()
-	actorKey := identity.Issuer + "\x00" + identity.Subject
-	actorID := manager.actors[actorKey]
-	if actorID == "" {
-		actorID, err = model.NewActorID()
-		if err == nil {
-			manager.actors[actorKey] = actorID
-		}
-	}
+	actorID, err := actorIDForIdentity(identity)
 	if err != nil {
-		manager.mutex.Unlock()
 		return Session{}, err
 	}
 	session := Session{ActorID: actorID, Issuer: identity.Issuer, Subject: identity.Subject, DisplayName: identity.DisplayName, Role: role, ExpiresAt: identity.ExpiresAt}
+	manager.mutex.Lock()
+	manager.cleanupSessions(manager.now())
+	if len(manager.sessions) >= manager.maxSessions {
+		manager.mutex.Unlock()
+		return Session{}, ErrAuthenticationCapacity
+	}
 	manager.sessions[sha256.Sum256([]byte(token))] = session
 	manager.mutex.Unlock()
 	session.Token = token
 	return session, nil
+}
+
+func actorIDForIdentity(identity Identity) (model.ActorID, error) {
+	if identity.Issuer == "" || identity.Subject == "" {
+		return "", fmt.Errorf("hosted identity issuer and subject are required")
+	}
+	digest := sha256.Sum256([]byte("apheliondmm-actor-v1\x00" + identity.Issuer + "\x00" + identity.Subject))
+	var value uuid.UUID
+	copy(value[:], digest[:len(value)])
+	value[6] = value[6]&0x0f | 0x70
+	value[8] = value[8]&0x3f | 0x80
+	actorID := model.ActorID(value.String())
+	if err := actorID.Validate(); err != nil {
+		return "", err
+	}
+	return actorID, nil
 }
 
 func (manager *Manager) Authorize(ctx context.Context, token string) (Session, error) {
@@ -233,6 +267,22 @@ func (manager *Manager) Logout(token string) {
 	manager.mutex.Lock()
 	delete(manager.sessions, sha256.Sum256([]byte(token)))
 	manager.mutex.Unlock()
+}
+
+func (manager *Manager) cleanupPending(now time.Time) {
+	for key, pending := range manager.pending {
+		if !now.Before(pending.expiresAt) {
+			delete(manager.pending, key)
+		}
+	}
+}
+
+func (manager *Manager) cleanupSessions(now time.Time) {
+	for key, session := range manager.sessions {
+		if !now.Before(session.ExpiresAt) {
+			delete(manager.sessions, key)
+		}
+	}
 }
 
 func validRole(role Role) bool {

@@ -1,0 +1,19 @@
+bind_address: "0.0.0.0:8080"
+public_origin: "https://maps.example.test"
+trusted_proxy_cidrs: []
+database:
+  dsn:
+    environment: "APHELIONDMM_DATABASE_DSN"
+oidc:
+  issuer: "https://identity.example.test"
+  client_id: "apheliondmm"
+  redirect_url: "https://maps.example.test/v1/auth/complete"
+  client_secret:
+    environment: "APHELIONDMM_OIDC_CLIENT_SECRET"
+limits:
+  max_connections: 64
+  max_operation_changes: 512
+  max_websocket_message_bytes: 262144
+  max_http_body_bytes: 524288
+telemetry:
+  endpoint: ""
