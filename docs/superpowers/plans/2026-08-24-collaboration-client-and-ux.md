@@ -148,7 +148,8 @@ func (c *Controller) Leave(ctx context.Context) error
 - [x] Run presence tests and confirm failure.
 - [x] Convert server presence into immutable overlay commands on the UI thread.
 - [x] Reuse existing overlay primitives with text labels and deterministic neutral style slots. Do not create new visual assets.
-- [ ] Coalesce local cursor/selection updates to the negotiated presence rate.
+- [x] Coalesce local cursor updates to the server-negotiated presence rate.
+- [x] Extend protocol v1 presence with bounded selection data, then publish selection updates at the negotiated rate.
 - [x] Confirm presence disappears on timeout/disconnect and never changes save output or canonical hash.
 - [ ] Run focused, race, and desktop visual smoke checks.
 - [ ] If authorized, commit with `feat(ui): display ephemeral collaborator presence`.
@@ -163,13 +164,13 @@ func (c *Controller) Leave(ctx context.Context) error
 - Modify: `internal/app/command/storage.go`
 - Modify: `internal/app/action_user.go`
 
-- [ ] Write tests for exponential reconnect with jitter bounds, resume from acknowledged revision, snapshot fallback, inverse success, inverse conflict, and no shared-history rewind.
-- [ ] Run tests and confirm failure.
-- [ ] Implement bounded reconnect delays that stop on explicit leave, authentication denial, or incompatible protocol.
-- [ ] Present conflict values and actions: refresh authoritative state, discard local edit, or rebuild a new operation from current state. Never offer force overwrite as ordinary conflict resolution.
-- [ ] Adapt desktop undo/redo actions to call actor inverse/forward operations when collaboration is active; preserve local command storage only in local compatibility mode.
+- [x] Write tests for exponential reconnect with jitter bounds, resume from acknowledged revision, snapshot fallback, inverse success, inverse conflict, and no shared-history rewind.
+- [x] Run tests and confirm failure.
+- [x] Implement bounded reconnect delays that stop on explicit leave, authentication denial, or incompatible protocol.
+- [x] Present conflict values and actions: refresh authoritative state, discard local edit, or rebuild a new operation from current state. Never offer force overwrite as ordinary conflict resolution.
+- [x] Adapt desktop undo/redo actions to call actor inverse/forward operations when collaboration is active; move history only after acknowledgement and preserve synchronous local command behavior.
 - [ ] Revalidate session/revision after any modal input resolves.
-- [ ] Run end-to-end tests with forced disconnect during pending operations.
+- [x] Run end-to-end tests with forced disconnect during pending operations.
 - [ ] If authorized, commit with `feat(ui): handle collaboration reconnect and safe undo`.
 
 ### Task 7: Exercise the shipped desktop multiplayer path
@@ -191,8 +192,8 @@ func (c *Controller) Leave(ctx context.Context) error
 
 - [x] Local and network executors pass the same conformance suite.
 - [ ] All map tools submit explicit operations when collaboration is active.
-- [ ] Speculation reconciles without declaring local state authoritative.
+- [x] Speculation reconciles without declaring local state authoritative.
 - [ ] Collaboration state and conflicts remain understandable without color or new assets.
-- [ ] Presence is lossy, bounded, and absent from saves/hashes.
-- [ ] Reconnect and actor undo preserve convergence.
+- [x] Presence is lossy, bounded, and absent from saves/hashes.
+- [x] Reconnect and actor undo preserve convergence.
 - [ ] The real desktop path completes a two-client session and atomic save.

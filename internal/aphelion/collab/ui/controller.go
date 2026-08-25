@@ -13,6 +13,7 @@ var (
 	ErrSessionActive            = errors.New("a collaboration session is already active")
 	ErrSessionChanged           = errors.New("collaboration session changed while confirmation was open")
 	ErrUnacknowledgedOperations = errors.New("collaboration operations are awaiting acknowledgement")
+	ErrReconnectInProgress      = errors.New("collaboration reconnect is already in progress")
 )
 
 type ProjectReplacementPermit struct {

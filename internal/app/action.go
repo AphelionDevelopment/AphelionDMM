@@ -1,11 +1,16 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	collabclient "sdmm/internal/aphelion/collab/client"
+	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
 	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/render"
@@ -235,6 +240,15 @@ func (a *app) CollaborationPresence() []collabui.ObservedPresence {
 		return nil
 	}
 	return a.collaborationClient.ObservedPresence()
+}
+
+func (a *app) PublishCollaborationPresence(coord model.Coord, selection *protocol.PresenceSelection) {
+	if a.collaborationClient == nil || !a.HasActiveCollaboration() {
+		return
+	}
+	if err := a.collaborationClient.PublishPresence(context.Background(), &coord, selection, "active"); err != nil && !errors.Is(err, collabclient.ErrTransportNotConnected) {
+		log.Debug().Err(err).Msg("unable to publish collaboration presence")
+	}
 }
 
 // APHELION EDIT ADDITION END

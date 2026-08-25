@@ -57,9 +57,16 @@ func TestProjectionSpeculatesAcceptsAndRejects(t *testing.T) {
 	if conflict.OperationID != second.OperationID || len(conflict.AuthoritativeValues) != 1 || len(rolledBack.Pending) != 0 {
 		t.Fatalf("rejection result = %#v, conflict = %#v", rolledBack, conflict)
 	}
+	if conflict.Draft.OperationID != second.OperationID || !conflict.Draft.Changes[0].After.Equal(second.Changes[0].After) {
+		t.Fatalf("conflict draft = %#v, want rejected operation %#v", conflict.Draft, second)
+	}
 	authoritative[0].State = model.TileState{}
 	if len(conflict.AuthoritativeValues[0].State.Prefabs) == 0 {
 		t.Fatal("conflict authoritative values alias protocol payload")
+	}
+	second.Changes[0].After = model.TileState{}
+	if len(conflict.Draft.Changes[0].After.Prefabs) == 0 {
+		t.Fatal("conflict draft aliases rejected operation")
 	}
 }
 

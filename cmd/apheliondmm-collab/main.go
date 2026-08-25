@@ -13,6 +13,7 @@ import (
 
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/server"
+	"sdmm/internal/aphelion/collab/store/sqlite"
 )
 
 const maxSnapshotConfigBytes = 256 << 20
@@ -29,6 +30,9 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	snapshotPath := flags.String("snapshot-config", "", "trusted local collaboration snapshot JSON")
 	listenAddress := flags.String("listen", "127.0.0.1:8080", "loopback listen address")
 	launchTokenPath := flags.String("launch-token-file", "", "new protected file that receives the single-use launch token")
+	databasePath := flags.String("database", "", "trusted local SQLite collaboration database; memory-only when omitted")
+	snapshotOperationThreshold := flags.Int("snapshot-operation-threshold", 0, "persist a compact snapshot after this many accepted operations; disabled when zero")
+	snapshotInterval := flags.Duration("snapshot-interval", 0, "maximum interval between durable snapshots; disabled when zero")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -36,13 +40,35 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		_, _ = fmt.Fprintln(stderr, "-snapshot-config and -launch-token-file are required")
 		return 2
 	}
+	if *snapshotOperationThreshold < 0 || *snapshotInterval < 0 {
+		_, _ = fmt.Fprintln(stderr, "-snapshot-operation-threshold and -snapshot-interval cannot be negative")
+		return 2
+	}
 	snapshot, err := loadSnapshot(*snapshotPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "load snapshot config: %v\n", err)
 		return 1
 	}
-	embedded, err := server.StartEmbeddedWithConfig(ctx, snapshot, server.EmbeddedConfig{ListenAddress: *listenAddress})
+	var durableStore server.SessionStore
+	if *databasePath != "" {
+		durableStore, err = sqlite.Open(*databasePath)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "open collaboration database: %v\n", err)
+			return 1
+		}
+	}
+	embedded, err := server.StartEmbeddedWithConfig(ctx, snapshot, server.EmbeddedConfig{
+		Store:         durableStore,
+		ListenAddress: *listenAddress,
+		Document: server.DocumentConfig{
+			SnapshotOperationThreshold: *snapshotOperationThreshold,
+			SnapshotInterval:           *snapshotInterval,
+		},
+	})
 	if err != nil {
+		if durableStore != nil {
+			_ = durableStore.Close()
+		}
 		_, _ = fmt.Fprintf(stderr, "start collaboration service: %v\n", err)
 		return 1
 	}

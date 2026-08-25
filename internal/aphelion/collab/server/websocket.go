@@ -14,6 +14,7 @@ import (
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 const webSocketIOTimeout = 5 * time.Second
@@ -27,14 +28,23 @@ func (service *Service) handleWebSocket(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, "protocol_required", "WebSocket protocol version is required")
 		return
 	}
+	if !service.joinLimiter.Allow(remoteIP(request), service.config.Now()) {
+		writeError(writer, http.StatusTooManyRequests, "join_rate_limited", "collaboration join rate exceeded")
+		return
+	}
 	service.mutex.RLock()
 	tokenValue := bearerToken(request)
 	auth, authenticated := service.tokens[tokenValue]
 	service.mutex.RUnlock()
-	if !authenticated || auth.launch || !service.config.Now().Before(auth.expiresAt) {
+	if !authenticated || auth.launch || auth.webSocketRedeemed || !service.config.Now().Before(auth.expiresAt) {
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "session token is invalid")
 		return
 	}
+	if !service.acquireConnection() {
+		writeError(writer, http.StatusTooManyRequests, "connection_limit", "collaboration connection limit reached")
+		return
+	}
+	defer service.releaseConnection()
 
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
 		Subprotocols:    []string{WebSocketSubprotocol},
@@ -45,12 +55,32 @@ func (service *Service) handleWebSocket(writer http.ResponseWriter, request *htt
 	if err != nil {
 		return
 	}
-	connection.SetReadLimit(protocol.MaxMessageBytes)
+	if service.telemetry != nil {
+		service.telemetry.ConnectionChanged(request.Context(), 1)
+		defer service.telemetry.ConnectionChanged(context.Background(), -1)
+	}
+	connection.SetReadLimit(service.limits.MaxWebSocketMessageBytes)
 	defer func() { _ = connection.CloseNow() }()
 	// Accept hijacks the HTTP connection, so the service context owns the WebSocket lifetime.
 	if err := service.serveWebSocket(service.context, connection, tokenValue, auth); err != nil && service.config.OnWebSocketError != nil {
 		service.config.OnWebSocketError(err)
 	}
+}
+
+func (service *Service) acquireConnection() bool {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if service.activeConnections >= service.limits.MaxConnections {
+		return false
+	}
+	service.activeConnections++
+	return true
+}
+
+func (service *Service) releaseConnection() {
+	service.mutex.Lock()
+	service.activeConnections--
+	service.mutex.Unlock()
 }
 
 func (service *Service) serveWebSocket(parent context.Context, connection *websocket.Conn, tokenValue string, auth tokenRecord) error {
@@ -80,12 +110,12 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 		_ = connection.Close(websocket.StatusPolicyViolation, "session unavailable")
 		return fmt.Errorf("load joined session: unavailable")
 	}
-	durable, cancelDurable, err := service.hub.SubscribeDurable(auth.sessionID, 64)
+	durable, cancelDurable, err := service.hub.SubscribeDurable(auth.sessionID, service.limits.DurableQueueDepth)
 	if err != nil {
 		return fmt.Errorf("subscribe durable operations: %w", err)
 	}
 	defer cancelDurable()
-	presenceSnapshot, presenceUpdates, cancelPresence, err := service.hub.SubscribePresence(auth.sessionID, 1)
+	presenceSnapshot, presenceUpdates, cancelPresence, err := service.hub.SubscribePresence(auth.sessionID, service.limits.PresenceQueueDepth)
 	if err != nil {
 		return fmt.Errorf("subscribe presence: %w", err)
 	}
@@ -99,39 +129,74 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 	if err != nil {
 		return fmt.Errorf("hash joined snapshot: %w", err)
 	}
+	resumptionToken, resumptionTokenExpiresAt, err := service.rotateResumptionToken(tokenValue, auth.sessionID, auth.principal)
+	if err != nil {
+		_ = connection.Close(websocket.StatusPolicyViolation, "session credential unavailable")
+		return fmt.Errorf("rotate resumption credential: %w", err)
+	}
 	if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{
 		ProtocolVersion: model.ProtocolVersion,
 		MessageID:       "joined-" + decoded.Envelope.MessageID,
 		SessionID:       auth.sessionID,
 		Type:            protocol.ServerJoined,
-	}, protocol.JoinedPayload{DocumentID: snapshot.DocumentID, ActorID: auth.principal.ActorID(), Role: string(auth.principal.Role()), Revision: snapshot.Revision, MapHash: mapHash}); err != nil {
+	}, protocol.JoinedPayload{DocumentID: snapshot.DocumentID, ActorID: auth.principal.ActorID(), Role: string(auth.principal.Role()), Revision: snapshot.Revision, MapHash: mapHash, PresenceIntervalMS: uint32(service.config.PresenceInterval / time.Millisecond), ResumptionToken: resumptionToken, ResumptionTokenExpiresAt: resumptionTokenExpiresAt}); err != nil {
 		return fmt.Errorf("write joined message: %w", err)
 	}
-	_, replay, err := service.store.Load(parent, snapshot.DocumentID)
+	loadContext := parent
+	finishLoad := func(error) {}
+	if service.telemetry != nil {
+		loadContext, finishLoad = service.telemetry.Store(parent, collabtelemetry.StoreLoad)
+	}
+	retainedSnapshot, replay, err := service.store.Load(loadContext, snapshot.DocumentID)
+	finishLoad(err)
 	if err != nil {
 		return fmt.Errorf("load reconnect replay: %w", err)
+	}
+	if join.AcknowledgedRevision < retainedSnapshot.Revision {
+		if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "snapshot-required-" + decoded.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerSessionNotice}, protocol.SessionNoticePayload{Code: protocol.NoticeSnapshotRequired, Message: "authoritative snapshot is required before replay"}); err != nil {
+			return fmt.Errorf("write snapshot-required notice: %w", err)
+		}
+		_ = connection.Close(websocket.StatusServiceRestart, "snapshot required")
+		return nil
+	}
+	replayCount := 0
+	for _, accepted := range replay {
+		if accepted.Revision > join.AcknowledgedRevision {
+			replayCount++
+		}
+	}
+	replayContext := parent
+	finishReplay := func(error) {}
+	if service.telemetry != nil {
+		replayContext, finishReplay = service.telemetry.Replay(parent, replayCount)
 	}
 	for _, accepted := range replay {
 		if accepted.Revision <= join.AcknowledgedRevision {
 			continue
 		}
-		acceptedHash, found, hashErr := service.store.RevisionHash(parent, snapshot.DocumentID, accepted.Revision)
+		acceptedHash, found, hashErr := service.store.RevisionHash(replayContext, snapshot.DocumentID, accepted.Revision)
 		if hashErr != nil {
+			finishReplay(hashErr)
 			return fmt.Errorf("load replay hash at revision %d: %w", accepted.Revision, hashErr)
 		}
 		if !found {
-			return fmt.Errorf("replay hash at revision %d is not retained", accepted.Revision)
+			err := fmt.Errorf("replay hash at revision %d is not retained", accepted.Revision)
+			finishReplay(err)
+			return err
 		}
-		if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "replay-" + string(accepted.OperationID), SessionID: auth.sessionID, Type: protocol.ServerOperationAccepted}, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash}); err != nil {
+		if err := writeServerEnvelope(replayContext, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "replay-" + string(accepted.OperationID), SessionID: auth.sessionID, Type: protocol.ServerOperationAccepted}, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash}); err != nil {
+			finishReplay(err)
 			return fmt.Errorf("write replay operation: %w", err)
 		}
 	}
-	if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "replay-complete-" + decoded.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerReplayComplete}, protocol.ReplayCompletePayload{Revision: snapshot.Revision, MapHash: mapHash}); err != nil {
+	if err := writeServerEnvelope(replayContext, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "replay-complete-" + decoded.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerReplayComplete}, protocol.ReplayCompletePayload{Revision: snapshot.Revision, MapHash: mapHash}); err != nil {
+		finishReplay(err)
 		return fmt.Errorf("write replay completion: %w", err)
 	}
+	finishReplay(nil)
 	participants := make([]protocol.ParticipantPresence, 0, len(presenceSnapshot))
 	for _, presence := range presenceSnapshot {
-		participants = append(participants, protocol.ParticipantPresence{ActorID: presence.ActorID, DisplayName: presence.DisplayName, Sequence: presence.Sequence, Cursor: presence.Cursor, Status: presence.Status})
+		participants = append(participants, protocol.ParticipantPresence{ActorID: presence.ActorID, DisplayName: presence.DisplayName, Sequence: presence.Sequence, Cursor: presence.Cursor, Selection: presence.Selection, Status: presence.Status})
 	}
 	if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "presence-snapshot-" + decoded.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerPresenceSnapshot}, protocol.PresenceSnapshotPayload{Participants: participants}); err != nil {
 		return fmt.Errorf("write presence snapshot: %w", err)
@@ -151,6 +216,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 			return fmt.Errorf("read client message: %w", err)
 		case accepted, open := <-durable:
 			if !open {
+				_ = connection.Close(CloseSlowConsumer, "durable consumer fell behind")
 				return fmt.Errorf("durable subscriber fell behind")
 			}
 			acceptedHash, found, hashErr := service.store.RevisionHash(parent, accepted.DocumentID, accepted.Revision)
@@ -167,7 +233,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 			if !open {
 				return nil
 			}
-			payload := protocol.ServerPresenceUpdatePayload{ActorID: presence.ActorID, DisplayName: presence.DisplayName, Sequence: presence.Sequence, Cursor: presence.Cursor, Status: presence.Status}
+			payload := protocol.ServerPresenceUpdatePayload{ActorID: presence.ActorID, DisplayName: presence.DisplayName, Sequence: presence.Sequence, Cursor: presence.Cursor, Selection: presence.Selection, Status: presence.Status}
 			if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: fmt.Sprintf("presence-%s-%d", presence.ActorID, presence.Sequence), SessionID: auth.sessionID, Type: protocol.ServerPresenceUpdate}, payload); err != nil {
 				return fmt.Errorf("write presence update: %w", err)
 			}
@@ -193,6 +259,7 @@ func readClientMessages(ctx context.Context, connection *websocket.Conn, session
 			if err == nil {
 				err = fmt.Errorf("message session id does not match authenticated session")
 			}
+			_ = connection.Close(websocket.StatusPolicyViolation, "invalid client message")
 			readErrors <- err
 			return
 		}
@@ -210,14 +277,36 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 		ping := message.Payload.(*protocol.PingPayload)
 		return writeServerEnvelope(ctx, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "pong-" + message.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerPong}, protocol.PongPayload{Nonce: ping.Nonce})
 	case protocol.ClientPresenceUpdate:
+		if !service.presenceLimiter.Allow(string(auth.principal.ActorID()), service.config.Now()) {
+			_ = connection.Close(CloseRateLimited, "presence rate exceeded")
+			return fmt.Errorf("presence rate exceeded for actor %q", auth.principal.ActorID())
+		}
 		presence := message.Payload.(*protocol.PresenceUpdatePayload)
-		if err := service.hub.UpdatePresence(auth.sessionID, auth.principal, PresenceUpdate{Sequence: presence.Sequence, Cursor: presence.Cursor, Status: presence.Status}); err != nil {
+		if err := service.hub.UpdatePresence(auth.sessionID, auth.principal, PresenceUpdate{Sequence: presence.Sequence, Cursor: presence.Cursor, Selection: presence.Selection, Status: presence.Status}); err != nil {
 			return fmt.Errorf("update presence: %w", err)
 		}
 		return nil
 	case protocol.ClientOperationSubmit:
 		submission := message.Payload.(*protocol.OperationSubmitPayload)
-		accepted, duplicate, err := service.hub.SubmitWithStatus(ctx, auth.sessionID, auth.principal, submission.Operation)
+		if len(submission.Operation.Changes) > service.limits.MaxOperationChanges {
+			current, snapshotErr := session.owner.Snapshot(ctx)
+			if snapshotErr != nil {
+				return fmt.Errorf("load limit rejection snapshot: %w", snapshotErr)
+			}
+			currentHash, _ := current.Hash()
+			return writeServerEnvelope(ctx, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "rejected-" + message.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerOperationRejected}, protocol.OperationRejectedPayload{OperationID: submission.Operation.OperationID, Code: "limit_exceeded", Message: "operation was rejected", Revision: current.Revision, MapHash: currentHash})
+		}
+		if !service.durableLimiter.Allow(string(auth.principal.ActorID()), service.config.Now()) {
+			_ = connection.Close(CloseRateLimited, "durable operation rate exceeded")
+			return fmt.Errorf("durable operation rate exceeded for actor %q", auth.principal.ActorID())
+		}
+		operationContext := ctx
+		finishOperation := func(error) {}
+		if service.telemetry != nil {
+			operationContext, finishOperation = service.telemetry.Operation(ctx, collabtelemetry.OperationSubmit)
+		}
+		accepted, duplicate, err := service.hub.SubmitWithStatus(operationContext, auth.sessionID, auth.principal, submission.Operation)
+		finishOperation(err)
 		if err != nil {
 			current, snapshotErr := session.owner.Snapshot(ctx)
 			if snapshotErr != nil {
@@ -240,8 +329,19 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 	case protocol.ClientAcknowledgedRevision:
 		return nil
 	case protocol.ClientInverseRequest:
+		if !service.durableLimiter.Allow(string(auth.principal.ActorID()), service.config.Now()) {
+			_ = connection.Close(CloseRateLimited, "durable operation rate exceeded")
+			return fmt.Errorf("durable operation rate exceeded for actor %q", auth.principal.ActorID())
+		}
 		inverse := message.Payload.(*protocol.InverseRequestPayload)
-		if _, err := service.hub.Inverse(ctx, auth.sessionID, auth.principal, inverse.OperationID); err != nil {
+		operationContext := ctx
+		finishOperation := func(error) {}
+		if service.telemetry != nil {
+			operationContext, finishOperation = service.telemetry.Operation(ctx, collabtelemetry.OperationInverse)
+		}
+		_, err := service.hub.Inverse(operationContext, auth.sessionID, auth.principal, inverse.OperationID)
+		finishOperation(err)
+		if err != nil {
 			current, snapshotErr := session.owner.Snapshot(ctx)
 			if snapshotErr != nil {
 				return fmt.Errorf("load inverse rejection snapshot: %w", snapshotErr)

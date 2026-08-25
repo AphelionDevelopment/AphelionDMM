@@ -14,6 +14,7 @@ type Projection struct {
 
 type Conflict struct {
 	OperationID         model.OperationID
+	Draft               model.Operation
 	Code                string
 	Message             string
 	Revision            model.Revision
@@ -89,9 +90,11 @@ func (projection Projection) Reject(rejected protocol.OperationRejectedPayload) 
 	}
 	remaining := make([]model.Operation, 0, len(projection.Pending))
 	found := false
+	var draft model.Operation
 	for _, pending := range projection.Pending {
 		if pending.OperationID == rejected.OperationID {
 			found = true
+			draft = model.CloneOperation(pending)
 			continue
 		}
 		remaining = append(remaining, model.CloneOperation(pending))
@@ -105,6 +108,7 @@ func (projection Projection) Reject(rejected protocol.OperationRejectedPayload) 
 	}
 	return Projection{Acknowledged: model.CloneSnapshot(projection.Acknowledged), Pending: rebased}, Conflict{
 		OperationID:         rejected.OperationID,
+		Draft:               draft,
 		Code:                rejected.Code,
 		Message:             rejected.Message,
 		Revision:            rejected.Revision,

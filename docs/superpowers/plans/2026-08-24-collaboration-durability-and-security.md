@@ -6,9 +6,15 @@
 
 **Architecture:** Put transactional storage behind the existing `SessionStore`, use SQLite for embedded/single-host deployments, recover by snapshot plus contiguous replay, and wrap network/process boundaries with bounded policy and telemetry.
 
-**Tech Stack:** Go 1.24, SQLite at least 3.51.3 through a pinned Go driver, OpenTelemetry Go, existing HTTP/WebSocket service, structured logs.
+**Tech Stack:** Go 1.25.13, SQLite at least 3.51.3 through a pinned Go driver, OpenTelemetry Go, existing HTTP/WebSocket service, structured logs.
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
+
+**Dependency evidence:** `docs/verification/phase-5-dependency-evaluation-2026-08-25.md`
+
+**Protected toolchain evidence:** `docs/verification/toolchain-security-audit-2026-08-25.md`
+
+**Durable-store evidence:** `docs/verification/phase-5-store-2026-08-25.md`
 
 ## Global Constraints
 
@@ -29,7 +35,7 @@
 - Create: `internal/aphelion/collab/store/memory_test.go`
 - Modify: `internal/aphelion/collab/server/document.go`
 
-- [ ] Move the phase-3 store interface into `store` and write reusable conformance tests for create, append, duplicate lookup, snapshot, load, continuity, and isolation between documents.
+- [x] Move the phase-3 store interface into `store` and write reusable conformance tests for create, append, duplicate lookup, snapshot, load, continuity, and isolation between documents.
 
 ```go
 type SessionStore interface {
@@ -37,14 +43,15 @@ type SessionStore interface {
 	Append(ctx context.Context, accepted model.AcceptedOperation) error
 	Load(ctx context.Context, id model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error)
 	SaveSnapshot(ctx context.Context, snapshot model.Snapshot) error
+	RevisionHash(ctx context.Context, id model.DocumentID, revision model.Revision) (string, bool, error)
 	LookupOperation(ctx context.Context, id model.DocumentID, operationID model.OperationID) (model.AcceptedOperation, bool, error)
 	Close() error
 }
 ```
 
-- [ ] Run `go test ./internal/aphelion/collab/store -count=1` and confirm failure.
-- [ ] Implement a reference memory store with copy-on-read/write and deterministic ordering.
-- [ ] Run the conformance suite against the memory store and rerun server tests.
+- [x] Run `go test ./internal/aphelion/collab/store -count=1` and confirm failure.
+- [x] Implement a reference memory store with copy-on-read/write and deterministic ordering.
+- [x] Run the conformance suite against the memory store and rerun server tests.
 - [ ] If authorized, commit with `refactor(store): formalize collaboration persistence contract`.
 
 ### Task 2: Add transactional SQLite persistence
@@ -57,13 +64,13 @@ type SessionStore interface {
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] Before adding a driver, record its exact module version, bundled SQLite version, license, supported platforms, and confirmation that `SELECT sqlite_version()` is at least 3.51.3. Reject the dependency if the runtime query is lower.
-- [ ] Run the store conformance suite against an absent SQLite implementation and confirm failure.
-- [ ] Add tables for documents, snapshots, and operations with unique `(document_id, operation_id)` and `(document_id, revision)` constraints.
-- [ ] Implement transactional create, idempotent append/lookup, snapshot save, and contiguous load.
-- [ ] Configure foreign keys, WAL, busy timeout, bounded connections, and explicit synchronous mode. Log the SQLite version and refuse an unsafe version.
-- [ ] Test concurrent duplicate append, lock timeout, migration idempotency, rollback on serialization failure, and database close.
-- [ ] Run conformance tests, race tests, and a Windows on-disk test.
+- [x] Before adding a driver, record its exact module version, bundled SQLite version, license, supported platforms, and confirmation that `SELECT sqlite_version()` is at least 3.51.3. Reject the dependency if the runtime query is lower.
+- [x] Run the store conformance suite against an absent SQLite implementation and confirm failure.
+- [x] Add tables for documents, snapshots, and operations with unique `(document_id, operation_id)` and `(document_id, revision)` constraints.
+- [x] Implement transactional create, idempotent append/lookup, snapshot save, and contiguous load.
+- [x] Configure foreign keys, WAL, busy timeout, bounded connections, and explicit synchronous mode. Record the SQLite version and refuse an unsafe version.
+- [x] Test concurrent duplicate append, bounded lock failure, migration idempotency/future-version rejection, rollback on an injected write failure, and database close. Model serialization has no fallible field type, so the rollback gate injects the database write failure after successful serialization.
+- [x] Run conformance tests, race tests, and a Windows on-disk test.
 - [ ] If authorized, commit with `feat(store): persist collaboration state in SQLite`.
 
 ### Task 3: Implement snapshots and restart recovery
@@ -74,12 +81,12 @@ type SessionStore interface {
 - Create: `internal/aphelion/collab/server/recovery_test.go`
 - Modify: `internal/aphelion/collab/server/config.go`
 
-- [ ] Write tests for snapshot thresholds, restart from snapshot plus replay, no-snapshot replay, missing revision, corrupt snapshot, wrong hash, interrupted snapshot write, and last acknowledged revision survival.
-- [ ] Run recovery tests and confirm failure.
-- [ ] Snapshot on configurable accepted-operation count and elapsed time without blocking the document owner on filesystem work; serialize an immutable revision view.
-- [ ] Load the latest valid snapshot, replay a contiguous log, and compare canonical hash before opening a document.
-- [ ] Fail readiness for corrupt/discontinuous documents while keeping unrelated documents available.
-- [ ] Add a process-level test that acknowledges an operation, terminates the service without a graceful snapshot, restarts, and confirms the operation is present.
+- [x] Write tests for snapshot thresholds, restart from snapshot plus replay, no-snapshot replay, missing revision, corrupt snapshot, wrong hash, interrupted snapshot write, and last acknowledged revision survival.
+- [x] Run recovery tests and confirm failure.
+- [x] Snapshot on configurable accepted-operation count and elapsed time without blocking the document owner on filesystem work; serialize an immutable revision view.
+- [x] Load the latest valid snapshot, replay a contiguous log, and compare canonical hash before opening a document.
+- [x] Fail readiness for corrupt/discontinuous documents while keeping unrelated documents available.
+- [x] Add a process-level test that acknowledges an operation, terminates the service without a graceful snapshot, restarts, and confirms the operation is present.
 - [ ] If authorized, commit with `feat(store): recover documents from snapshot and replay`.
 
 ### Task 4: Enforce network and authorization policy
@@ -91,13 +98,13 @@ type SessionStore interface {
 - Modify: `internal/aphelion/collab/server/http.go`
 - Modify: `internal/aphelion/collab/server/websocket.go`
 
-- [ ] Write abuse tests for unauthorized upgrade, unapproved origin, forged actor ID, role violation, oversized HTTP body, oversized WebSocket frame, excessive changes, invalid coordinates, join floods, operation floods, slow reader, and repeated malformed messages.
-- [ ] Run security tests and confirm failure.
-- [ ] Implement immutable limits for bytes, identifiers, operations, changes, joins, connection count, queue depth, and timeouts.
-- [ ] Add per-IP join and per-actor durable/presence rate limiters with bounded memory and expiry.
-- [ ] Derive actor ID and role from the authenticated server-side principal, overwriting any client field before domain validation.
-- [ ] Close repeated violators with stable close codes and secret-free log fields.
-- [ ] Run security tests under race detection and with fuzzed envelope decoding.
+- [x] Write abuse tests for unauthorized upgrade, unapproved origin, forged actor ID, role violation, oversized HTTP body, oversized WebSocket frame, excessive changes, invalid coordinates, join floods, operation floods, slow reader, and repeated malformed messages. Malformed frames close on the first violation rather than retaining a connection for repeated violations.
+- [x] Run security tests and confirm failure.
+- [x] Implement immutable limits for bytes, identifiers, operations, changes, joins, connection count, queue depth, and timeouts.
+- [x] Add per-IP join and per-actor durable/presence rate limiters with bounded memory and expiry.
+- [x] Derive actor ID and role from the authenticated server-side principal, overwriting any client field before domain validation.
+- [x] Close repeated violators with stable close codes and secret-free log fields.
+- [x] Run security tests under race detection and with fuzzed envelope decoding.
 - [ ] If authorized, commit with `security: enforce collaboration transport and role limits`.
 
 ### Task 5: Add OpenTelemetry observability and readiness
@@ -111,12 +118,12 @@ type SessionStore interface {
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] Write tests using OpenTelemetry in-memory exporters to assert operation, store, replay, presence-drop, and connection spans/metrics without raw map data or token attributes.
-- [ ] Run telemetry tests and confirm failure.
-- [ ] Add pinned OpenTelemetry API/SDK modules and initialize them through dependency injection.
-- [ ] Instrument validation, append, apply, broadcast, reconnect replay, snapshot, and recovery.
-- [ ] Make `/v1/health/live` process-only and `/v1/health/ready` reflect store migrations and recoverable document ownership.
-- [ ] Verify disabled telemetry adds minimal allocations and no network dependency.
+- [x] Write tests using OpenTelemetry in-memory exporters to assert operation, store, replay, presence-drop, and connection spans/metrics without raw map data or token attributes.
+- [x] Run telemetry tests and confirm failure.
+- [x] Add pinned OpenTelemetry API/SDK modules and initialize them through dependency injection.
+- [x] Instrument validation, append, apply, broadcast, reconnect replay, snapshot, and recovery.
+- [x] Make `/v1/health/live` process-only and `/v1/health/ready` reflect store migrations and recoverable document ownership.
+- [x] Verify disabled telemetry adds minimal allocations and no network dependency.
 - [ ] If authorized, commit with `feat(observability): instrument collaboration service`.
 
 ### Task 6: Harden updater and outbound HTTP behavior
@@ -128,13 +135,13 @@ type SessionStore interface {
 - Create: `internal/req/req_test.go`
 - Create: `internal/app/selfupdate/selfupdate_test.go`
 
-- [ ] Write tests for connect/TLS/header/body timeouts, response-size limit, non-success status, invalid content type, bad signature, truncated artifact, and preservation of the installed executable.
-- [ ] Run focused tests and confirm existing behavior fails the required cases.
-- [ ] Present the exact updater/request file effects and obtain protected-infrastructure approval.
-- [ ] Replace default clients with an injected bounded `http.Client`; apply `io.LimitReader` before buffering.
-- [ ] Verify signed metadata and artifact hash/signature before handing data to the existing replacement mechanism.
-- [ ] Preserve the old executable and emit a recoverable error on every failed verification/replacement.
-- [ ] Run updater tests without public network access using `httptest.Server`.
+- [x] Write tests for connect/TLS/header/body timeouts, response-size limit, non-success status, invalid content type, bad signature, truncated artifact, and preservation of the installed executable.
+- [x] Run focused tests and confirm existing behavior fails the required cases.
+- [x] Present the exact updater/request file effects and obtain protected-infrastructure approval.
+- [x] Replace default clients with an injected bounded `http.Client`; apply `io.LimitReader` before buffering.
+- [x] Verify signed metadata and artifact hash/signature before handing data to the existing replacement mechanism.
+- [x] Preserve the old executable and emit a recoverable error on every failed verification/replacement.
+- [x] Run updater tests without public network access using `httptest.Server`.
 - [ ] If authorized, commit with `security(updater): bound and verify update downloads`.
 
 ### Task 7: Add crash, corruption, and saturation gates
@@ -145,21 +152,20 @@ type SessionStore interface {
 - Create: `cmd/apheliondmm-collab/fault_test.go`
 - Modify after approval: `.github/workflows/ci.yml`
 
-- [ ] Add deterministic fault injection at store append, snapshot write, broadcast, and shutdown boundaries.
-- [ ] Prove unacknowledged operations may be absent after crash but acknowledged operations are recovered exactly once.
-- [ ] Corrupt a copied test database/snapshot and prove readiness fails without altering the source fixture.
-- [ ] Saturate presence and operation queues and prove bounded memory/latency behavior.
-- [ ] Obtain CI-file approval, then add race, SQLite restart, fuzz smoke, and fault-test jobs using pinned toolchains.
-- [ ] Run the complete local verification set and the real service/desktop entry points.
+- [x] Add deterministic fault injection at store append, snapshot write, broadcast, and shutdown boundaries.
+- [x] Prove unacknowledged operations may be absent after crash but acknowledged operations are recovered exactly once.
+- [x] Corrupt a copied test database/snapshot and prove readiness fails without altering the source fixture.
+- [x] Saturate presence and operation queues and prove bounded memory/latency behavior.
+- [x] Obtain CI-file approval, then add race, SQLite restart, fuzz smoke, and fault-test jobs using pinned toolchains.
+- [x] Run the complete local verification set and the real service/desktop entry points.
 - [ ] If authorized, commit with `test(collab): gate durability and failure recovery`.
 
 ## Phase acceptance
 
-- [ ] SQLite runtime version meets the minimum and all store conformance tests pass.
-- [ ] Every acknowledged operation survives forced restart exactly once.
-- [ ] Corrupt or discontinuous state fails closed and does not affect unrelated documents.
-- [ ] Transport/role abuse is bounded and leaves authoritative state unchanged.
-- [ ] Telemetry exposes required signals without secrets or map content.
-- [ ] Updater failures preserve the installed application.
-- [ ] LAN enablement remains explicit; zero-value configuration is loopback-only.
-
+- [x] SQLite runtime version meets the minimum and all store conformance tests pass.
+- [x] Every acknowledged operation survives forced restart exactly once.
+- [x] Corrupt or discontinuous state fails closed and does not affect unrelated documents.
+- [x] Transport/role abuse is bounded and leaves authoritative state unchanged.
+- [x] Telemetry exposes required signals without secrets or map content.
+- [x] Updater failures preserve the installed application.
+- [x] LAN enablement remains explicit; zero-value configuration is loopback-only.

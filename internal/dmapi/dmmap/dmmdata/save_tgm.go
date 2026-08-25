@@ -88,7 +88,7 @@ func (d DmmData) WriteTGM(writer io.Writer) error {
 func toTGMStr(key Key, content Prefabs, lineBreak string) string {
 	sb := strings.Builder{}
 
-	sb.WriteString(fmt.Sprintf("\"%s\" = (", key))
+	fmt.Fprintf(&sb, "\"%s\" = (", key)
 	sb.WriteString(lineBreak)
 
 	for idx, prefab := range content {

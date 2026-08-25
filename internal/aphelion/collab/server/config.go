@@ -1,8 +1,21 @@
 package server
 
-import "time"
+import (
+	"time"
+
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
+)
+
+type DocumentConfig struct {
+	SnapshotOperationThreshold int
+	SnapshotInterval           time.Duration
+	OnSnapshotError            func(error)
+	Telemetry                  *collabtelemetry.Telemetry
+}
 
 type EmbeddedConfig struct {
+	Store           SessionStore
+	Document        DocumentConfig
 	ListenAddress   string
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration

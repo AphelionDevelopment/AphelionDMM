@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +84,79 @@ func TestNetworkExecutorAcceptRejectAndInverse(t *testing.T) {
 	network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: rejectedID, Code: "precondition_failed", Message: "conflict", Revision: 1, MapHash: acceptedHash}))
 	if executeErr := <-rejectedErrors; !errors.Is(executeErr, ErrOperationRejected) {
 		t.Fatalf("Execute(rejected) error = %v, want %v", executeErr, ErrOperationRejected)
+	}
+}
+
+func TestNetworkExecutorConflictRefreshDiscardAndRebuild(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeTransport()
+	network, err := NewNetworkExecutor(transport, snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := projectionOperation(t, snapshot, 1)
+	rejected := make(chan error, 1)
+	go func() {
+		_, executeErr := network.Execute(context.Background(), draft)
+		rejected <- executeErr
+	}()
+	submitted := transport.next(t)
+	decoded, err := protocol.DecodeClient(mustJSON(t, submitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	submission := decoded.Payload.(*protocol.OperationSubmitPayload).Operation
+	mapHash, err := snapshot.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{
+		OperationID: submission.OperationID,
+		Code:        "precondition_failed",
+		Message:     "conflict",
+		Revision:    snapshot.Revision,
+		MapHash:     mapHash,
+	}))
+	if executeErr := <-rejected; !errors.Is(executeErr, ErrOperationRejected) {
+		t.Fatalf("Execute() error = %v, want %v", executeErr, ErrOperationRejected)
+	}
+
+	refreshed, err := network.RefreshConflict(context.Background(), submission.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Revision != snapshot.Revision || len(network.Conflicts()) != 1 {
+		t.Fatalf("refresh = revision %d, conflicts %d; want revision %d, conflicts 1", refreshed.Revision, len(network.Conflicts()), snapshot.Revision)
+	}
+	rebuilt, err := network.BuildConflictRebuild(context.Background(), submission.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.OperationID == submission.OperationID || rebuilt.ActorID != actorID || rebuilt.BaseRevision != snapshot.Revision || rebuilt.BaseMapHash != mapHash {
+		t.Fatalf("rebuilt operation identity/base = %#v", rebuilt)
+	}
+	if len(rebuilt.Changes) != 1 || !rebuilt.Changes[0].Before.Equal(tileAt(snapshot, 1)) || !rebuilt.Changes[0].After.Equal(submission.Changes[0].After) {
+		t.Fatalf("rebuilt changes = %#v, want current authoritative before and rejected intended after", rebuilt.Changes)
+	}
+	if len(network.Conflicts()) != 1 {
+		t.Fatal("building a replacement dismissed the unresolved conflict")
+	}
+	if _, err := network.DiscardConflict(context.Background(), submission.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if len(network.Conflicts()) != 0 {
+		t.Fatal("discard retained the conflict")
+	}
+	select {
+	case message := <-transport.sent:
+		t.Fatalf("conflict lifecycle sent an unexpected network message: %#v", message)
+	default:
 	}
 }
 
@@ -221,6 +295,114 @@ func TestNetworkExecutorTerminationReleasesPendingOperation(t *testing.T) {
 	}
 	if network.HasUnacknowledgedOperations() {
 		t.Fatal("terminated executor retained speculative operations")
+	}
+}
+
+func TestNetworkExecutorSuspendsAndResumesOnFreshTransport(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := newFakeTransport()
+	network, err := NewNetworkExecutor(first, snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingResult := make(chan error, 1)
+	if err := network.ExecuteAsync(context.Background(), projectionOperation(t, snapshot, 1), func(_ model.AcceptedOperation, executeErr error) { pendingResult <- executeErr }); err != nil {
+		t.Fatal(err)
+	}
+	first.next(t)
+	lost := errors.New("connection lost")
+	network.Suspend(lost)
+	if executeErr := <-pendingResult; !errors.Is(executeErr, lost) {
+		t.Fatalf("suspended pending operation error = %v, want %v", executeErr, lost)
+	}
+	second := newFakeTransport()
+	if err := network.Resume(second); err != nil {
+		t.Fatal(err)
+	}
+	acceptedResult := make(chan operationResult, 1)
+	if err := network.ExecuteAsync(context.Background(), projectionOperation(t, snapshot, 2), func(accepted model.AcceptedOperation, executeErr error) {
+		acceptedResult <- operationResult{accepted: accepted, err: executeErr}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitted := second.next(t)
+	decoded, err := protocol.DecodeClient(mustJSON(t, submitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := decoded.Payload.(*protocol.OperationSubmitPayload).Operation
+	accepted := model.AcceptedOperation{Operation: operation, Revision: 1, AcceptedAt: time.Unix(1, 0)}
+	after := snapshotWithOperation(t, snapshot, accepted)
+	mapHash, err := after.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash}))
+	result := <-acceptedResult
+	if result.err != nil || result.accepted.OperationID != operation.OperationID {
+		t.Fatalf("resumed execution = %#v", result)
+	}
+}
+
+func TestNetworkExecutorReplacesAcknowledgedSnapshotWithoutRollback(t *testing.T) {
+	t.Parallel()
+
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeTransport()
+	network, err := NewNetworkExecutor(transport, snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := model.CloneSnapshot(snapshot)
+	replacement.Revision = snapshot.Revision + 3
+	stableID, err := model.NewStableID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.Tiles = []model.Tile{{Coord: model.Coord{X: 1, Y: 1, Z: 1}, State: model.TileState{Prefabs: []model.PrefabState{{StableID: stableID, Path: "/turf/open/floor", Vars: map[string]string{"dir": "8"}}}}}}
+	if err := network.ReplaceAcknowledgedSnapshot(context.Background(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	current, err := network.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != replacement.Revision || !current.Tiles[0].State.Equal(replacement.Tiles[0].State) {
+		t.Fatalf("replacement snapshot = %#v, want %#v", current, replacement)
+	}
+	if err := network.ReplaceAcknowledgedSnapshot(context.Background(), snapshot); err == nil {
+		t.Fatal("snapshot replacement allowed revision rollback")
+	}
+	incompatible := model.CloneSnapshot(replacement)
+	incompatible.Revision++
+	incompatible.EnvironmentHash = strings.Repeat("b", 64)
+	if err := network.ReplaceAcknowledgedSnapshot(context.Background(), incompatible); err == nil {
+		t.Fatal("snapshot replacement allowed incompatible environment")
+	}
+	pendingResult := make(chan error, 1)
+	if err := network.ExecuteAsync(context.Background(), projectionOperation(t, replacement, 2), func(_ model.AcceptedOperation, executeErr error) { pendingResult <- executeErr }); err != nil {
+		t.Fatal(err)
+	}
+	transport.next(t)
+	newer := model.CloneSnapshot(replacement)
+	newer.Revision++
+	if err := network.ReplaceAcknowledgedSnapshot(context.Background(), newer); err == nil {
+		t.Fatal("snapshot replacement allowed a pending operation")
+	}
+	lost := errors.New("test cleanup")
+	network.Suspend(lost)
+	if executeErr := <-pendingResult; !errors.Is(executeErr, lost) {
+		t.Fatalf("pending cleanup error = %v, want %v", executeErr, lost)
 	}
 }
 

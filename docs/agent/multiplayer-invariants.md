@@ -33,6 +33,8 @@ Operations describe domain changes, not UI gestures. A brush drag is converted t
 - Map resize, environment replacement, import, and export-finalization are exclusive maintenance operations.
 - Clients reconcile from accepted operations; they never declare local speculative state authoritative.
 - A reconnect starts from an acknowledged revision and receives a snapshot or contiguous replay sufficient to reconstruct current state.
+- If the acknowledged revision predates retained replay history, the server sends `snapshot_required` and closes without a partial replay. The client fetches the authenticated HTTP snapshot, installs only a compatible non-rollback baseline with no pending operations, and reconnects again from the fetched revision.
+- Invitation and join credentials are redeemed on successful WebSocket join. The authenticated `joined` response supplies a short-lived session-and-actor-scoped resumption credential held only in memory and rotated on every successful reconnect. Authentication or protocol incompatibility stops retries and clears that credential.
 
 ## Undo and redo
 
@@ -41,6 +43,8 @@ Undo is a new inverse operation authored by the requesting actor. It names the t
 ## Presence
 
 Cursor, selection, viewport, tool preview, typing, and user status are ephemeral. They are not written to the durable operation log, do not affect map hashes, may be dropped or coalesced, and expire after disconnect or timeout.
+
+The server advertises the permitted client publication interval in the authenticated `joined` message. Protocol v1 requires `presence_interval_ms` in the inclusive range 16 through 5000. Clients publish no faster than that interval and continue using the separate lossy presence queue; this limit never applies backpressure to durable operations.
 
 ## Map fidelity and persistence
 

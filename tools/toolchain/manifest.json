@@ -1,7 +1,7 @@
 {
-	"go": "1.24.0",
+	"go": "1.25.13",
 	"rust": "1.82.0",
 	"rust_target": "x86_64-pc-windows-gnu",
 	"task_major": 3,
-	"golangci_lint": "2.1.5"
+	"golangci_lint": "2.12.2"
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"runtime"
 
 	"sdmm/internal/app/selfupdate"
@@ -51,28 +52,42 @@ func (a *app) checkForUpdatesV(forceAvailable bool) {
 func (a *app) selfUpdate() {
 	a.menu.SetUpdating()
 
-	var updateDownloadLink string
+	// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: var updateDownloadLink string
+	var updateArtifact selfupdate.Artifact
 
 	switch runtime.GOOS {
 	case "windows":
-		updateDownloadLink = remoteManifest.DownloadLinks.Windows
+		// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: updateDownloadLink = remoteManifest.DownloadLinks.Windows
+		updateArtifact = remoteManifest.DownloadLinks.Windows
 	case "linux":
-		updateDownloadLink = remoteManifest.DownloadLinks.Linux
+		// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: updateDownloadLink = remoteManifest.DownloadLinks.Linux
+		updateArtifact = remoteManifest.DownloadLinks.Linux
 	case "darwin":
-		updateDownloadLink = remoteManifest.DownloadLinks.MacOS
+		// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: updateDownloadLink = remoteManifest.DownloadLinks.MacOS
+		updateArtifact = remoteManifest.DownloadLinks.MacOS
 	}
 
-	log.Print("updating with:", updateDownloadLink)
+	// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: log.Print("updating with:", updateDownloadLink)
+	log.Print("updating with:", updateArtifact.URL)
 
 	go func() {
-		latestUpdate, err := req.Get(updateDownloadLink)
+		// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: latestUpdate, err := req.Get(updateDownloadLink)
+		latestUpdate, err := req.GetWithClient(context.Background(), req.NewClient(), updateArtifact.URL, req.Options{
+			MaxBytes: req.DefaultMaxBodyBytes,
+			ContentTypes: []string{
+				"application/octet-stream",
+				"application/x-msdownload",
+				"binary/octet-stream",
+			},
+		})
 		if err != nil {
 			log.Print("unable to get latest update:", err)
 			a.menu.SetUpdateError()
 			return
 		}
 
-		if err = selfupdate.Update(latestUpdate); err != nil {
+		// APHELION EDIT CHANGE - SECURE_UPDATER - ORIGINAL: if err = selfupdate.Update(latestUpdate); err != nil {
+		if err = selfupdate.Update(latestUpdate, updateArtifact); err != nil {
 			log.Print("unable to complete self update:", err)
 			a.menu.SetUpdateError()
 			return

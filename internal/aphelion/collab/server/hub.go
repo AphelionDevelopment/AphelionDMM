@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sdmm/internal/aphelion/collab/model"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 type Role string
@@ -69,10 +70,15 @@ type Hub struct {
 	mutex           sync.RWMutex
 	presenceTimeout time.Duration
 	sessions        map[string]*hubSession
+	telemetry       *collabtelemetry.Telemetry
 }
 
 func NewHub(presenceTimeout time.Duration) *Hub {
-	return &Hub{presenceTimeout: presenceTimeout, sessions: make(map[string]*hubSession)}
+	return NewHubWithTelemetry(presenceTimeout, nil)
+}
+
+func NewHubWithTelemetry(presenceTimeout time.Duration, observability *collabtelemetry.Telemetry) *Hub {
+	return &Hub{presenceTimeout: presenceTimeout, sessions: make(map[string]*hubSession), telemetry: observability}
 }
 
 func (hub *Hub) Create(sessionID string, owner *DocumentOwner, creator Principal) error {
@@ -92,7 +98,7 @@ func (hub *Hub) Create(sessionID string, owner *DocumentOwner, creator Principal
 	}
 	hub.sessions[sessionID] = &hubSession{
 		owner:              owner,
-		presence:           NewPresenceManager(hub.presenceTimeout),
+		presence:           NewPresenceManagerWithTelemetry(hub.presenceTimeout, hub.telemetry),
 		members:            map[model.ActorID]Principal{creator.ActorID(): creator},
 		durableSubscribers: make(map[uint64]chan model.AcceptedOperation),
 	}

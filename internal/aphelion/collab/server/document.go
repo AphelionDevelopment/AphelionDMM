@@ -9,6 +9,7 @@ import (
 
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 const documentRequestQueueSize = 256
@@ -44,9 +45,14 @@ type DocumentOwner struct {
 	done      chan struct{}
 	cancel    context.CancelFunc
 	closeOnce sync.Once
+	snapshots sync.WaitGroup
 }
 
 func StartDocument(ctx context.Context, snapshot model.Snapshot, store SessionStore) (*DocumentOwner, error) {
+	return StartDocumentWithConfig(ctx, snapshot, store, DocumentConfig{})
+}
+
+func StartDocumentWithConfig(ctx context.Context, snapshot model.Snapshot, store SessionStore, config DocumentConfig) (*DocumentOwner, error) {
 	if store == nil {
 		return nil, fmt.Errorf("start document: store is nil")
 	}
@@ -54,17 +60,28 @@ func StartDocument(ctx context.Context, snapshot model.Snapshot, store SessionSt
 	if err != nil {
 		return nil, fmt.Errorf("start document: %w", err)
 	}
-	if err := store.Create(ctx, snapshot); err != nil {
+	storeContext := ctx
+	finishStore := func(error) {}
+	if config.Telemetry != nil {
+		storeContext, finishStore = config.Telemetry.Store(ctx, collabtelemetry.StoreCreate)
+	}
+	if err := store.Create(storeContext, snapshot); err != nil {
+		finishStore(err)
 		return nil, fmt.Errorf("create stored session: %w", err)
 	}
+	finishStore(nil)
+	return startDocument(ctx, document, store, config), nil
+}
+
+func startDocument(ctx context.Context, document *engine.Document, store SessionStore, config DocumentConfig) *DocumentOwner {
 	runContext, cancel := context.WithCancel(ctx)
 	owner := &DocumentOwner{
 		requests: make(chan request, documentRequestQueueSize),
 		done:     make(chan struct{}),
 		cancel:   cancel,
 	}
-	go owner.run(runContext, document, store)
-	return owner, nil
+	go owner.run(runContext, document, store, config)
+	return owner
 }
 
 func (owner *DocumentOwner) Submit(ctx context.Context, operation model.Operation) (model.AcceptedOperation, error) {
@@ -91,6 +108,7 @@ func (owner *DocumentOwner) Close(ctx context.Context) error {
 	owner.closeOnce.Do(owner.cancel)
 	select {
 	case <-owner.done:
+		owner.snapshots.Wait()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -116,20 +134,56 @@ func (owner *DocumentOwner) request(ctx context.Context, value request) (respons
 	}
 }
 
-func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, store SessionStore) {
+func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, store SessionStore, config DocumentConfig) {
 	defer close(owner.done)
+	acceptedSinceSnapshot := 0
+	snapshotInFlight := false
+	snapshotResults := make(chan snapshotResult, 1)
+	var interval <-chan time.Time
+	var ticker *time.Ticker
+	if config.SnapshotInterval > 0 {
+		ticker = time.NewTicker(config.SnapshotInterval)
+		defer ticker.Stop()
+		interval = ticker.C
+	}
+	scheduleSnapshot := func() {
+		snapshotInFlight = true
+		owner.saveSnapshot(ctx, store, document.Snapshot(), snapshotResults, config.Telemetry)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-interval:
+			if acceptedSinceSnapshot > 0 && !snapshotInFlight {
+				scheduleSnapshot()
+			}
+		case result := <-snapshotResults:
+			snapshotInFlight = false
+			if result.err != nil {
+				if config.OnSnapshotError != nil {
+					config.OnSnapshotError(result.err)
+				}
+			} else {
+				acceptedSinceSnapshot = int(document.Snapshot().Revision - result.revision)
+			}
+			if config.SnapshotOperationThreshold > 0 && acceptedSinceSnapshot >= config.SnapshotOperationThreshold {
+				scheduleSnapshot()
+			}
 		case request := <-owner.requests:
 			switch request.kind {
 			case requestSubmit:
-				accepted, err := submit(ctx, document, store, request.operation)
+				accepted, err := submit(ctx, document, store, request.operation, config.Telemetry)
 				if err == nil {
 					document = accepted.document
+					if !accepted.duplicate {
+						acceptedSinceSnapshot++
+					}
 				}
 				request.response <- response{accepted: accepted.operation, duplicate: accepted.duplicate, err: err}
+				if err == nil && !snapshotInFlight && config.SnapshotOperationThreshold > 0 && acceptedSinceSnapshot >= config.SnapshotOperationThreshold {
+					scheduleSnapshot()
+				}
 			case requestSnapshot:
 				request.response <- response{snapshot: document.Snapshot()}
 			case requestBuildInverse:
@@ -142,13 +196,37 @@ func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, 
 	}
 }
 
+type snapshotResult struct {
+	revision model.Revision
+	err      error
+}
+
+func (owner *DocumentOwner) saveSnapshot(ctx context.Context, store SessionStore, snapshot model.Snapshot, results chan<- snapshotResult, observability *collabtelemetry.Telemetry) {
+	owner.snapshots.Add(1)
+	go func() {
+		defer owner.snapshots.Done()
+		storeContext := ctx
+		finishStore := func(error) {}
+		if observability != nil {
+			storeContext, finishStore = observability.Store(ctx, collabtelemetry.StoreSnapshot)
+		}
+		err := store.SaveSnapshot(storeContext, snapshot)
+		finishStore(err)
+		result := snapshotResult{revision: snapshot.Revision, err: err}
+		select {
+		case results <- result:
+		case <-ctx.Done():
+		}
+	}()
+}
+
 type submitResult struct {
 	operation model.AcceptedOperation
 	document  *engine.Document
 	duplicate bool
 }
 
-func submit(ctx context.Context, document *engine.Document, store SessionStore, operation model.Operation) (submitResult, error) {
+func submit(ctx context.Context, document *engine.Document, store SessionStore, operation model.Operation, observability *collabtelemetry.Telemetry) (submitResult, error) {
 	prior, exists, err := store.LookupOperation(ctx, operation.DocumentID, operation.OperationID)
 	if err != nil {
 		return submitResult{}, err
@@ -161,8 +239,15 @@ func submit(ctx context.Context, document *engine.Document, store SessionStore, 
 	if err != nil {
 		return submitResult{}, err
 	}
-	if err := store.Append(ctx, accepted); err != nil {
+	storeContext := ctx
+	finishStore := func(error) {}
+	if observability != nil {
+		storeContext, finishStore = observability.Store(ctx, collabtelemetry.StoreAppend)
+	}
+	if err := store.Append(storeContext, accepted); err != nil {
+		finishStore(err)
 		return submitResult{}, err
 	}
+	finishStore(nil)
 	return submitResult{operation: accepted, document: candidate}, nil
 }

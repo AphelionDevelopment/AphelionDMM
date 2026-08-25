@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"sdmm/internal/aphelion/collab/model"
 	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/render"
@@ -228,6 +229,73 @@ func (a *app) DoLeaveCollaborationSession() {
 	}()
 }
 
+func (a *app) DoRetryCollaborationSession() {
+	client := a.collaborationClient
+	if client == nil || !a.HasActiveCollaboration() {
+		return
+	}
+	if err := client.RetryReconnect(); err != nil {
+		log.Error().Err(err).Msg("Unable to retry collaboration reconnect")
+		util.ShowErrorDialog("Unable to retry collaboration reconnect: " + err.Error())
+	}
+}
+
+func (a *app) DoResolveCollaborationConflict(operationID model.OperationID, action collabui.ConflictAction) {
+	client := a.collaborationClient
+	editor := a.collaborationEditor
+	if client == nil || editor == nil || !a.HasActiveCollaboration() {
+		return
+	}
+	refresh := func() {
+		if a.collaborationClient != client || a.collaborationEditor != editor || !a.HasActiveCollaboration() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		if err := editor.RefreshCollaborationSnapshot(ctx); err != nil {
+			log.Error().Err(err).Msg("Unable to synchronize conflict resolution")
+			util.ShowErrorDialog("Unable to synchronize conflict resolution: " + err.Error())
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+	switch action {
+	case collabui.ConflictActionRefresh:
+		_, err := client.RefreshConflict(ctx, operationID)
+		cancel()
+		if err != nil {
+			util.ShowErrorDialog("Unable to refresh conflict: " + err.Error())
+			return
+		}
+		refresh()
+	case collabui.ConflictActionDiscard:
+		_, err := client.DiscardConflict(ctx, operationID)
+		cancel()
+		if err != nil {
+			util.ShowErrorDialog("Unable to discard conflict: " + err.Error())
+			return
+		}
+		refresh()
+	case collabui.ConflictActionRebuild:
+		cancel()
+		err := client.RebuildConflict(context.Background(), operationID, func(_ model.AcceptedOperation, rebuildErr error) {
+			window.RunLater(func() {
+				if rebuildErr != nil {
+					log.Error().Err(rebuildErr).Msg("Unable to rebuild conflict")
+					util.ShowErrorDialog("Unable to rebuild conflict: " + rebuildErr.Error())
+					return
+				}
+				refresh()
+			})
+		})
+		if err != nil {
+			util.ShowErrorDialog("Unable to rebuild conflict: " + err.Error())
+		}
+	default:
+		cancel()
+		util.ShowErrorDialog("Unable to resolve conflict: unsupported action")
+	}
+}
+
 func (a *app) HasActiveCollaboration() bool {
 	return a.collaborationController != nil && a.collaborationController.Active()
 }
@@ -320,13 +388,15 @@ func (a *app) DoExit() {
 // DoUndo does undo of the latest command.
 func (a *app) DoUndo() {
 	log.Print("undo")
-	a.commandStorage.Undo()
+	// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: a.commandStorage.Undo()
+	a.commandStorage.UndoAsync(nil)
 }
 
 // DoRedo does redo of the previous command.
 func (a *app) DoRedo() {
 	log.Print("redo")
-	a.commandStorage.Redo()
+	// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: a.commandStorage.Redo()
+	a.commandStorage.RedoAsync(nil)
 }
 
 // DoResetLayout resets application windows to their initial positions.

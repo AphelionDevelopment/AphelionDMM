@@ -25,10 +25,10 @@ func (runner doctorRunner) Run(_ context.Context, name string, _ ...string) ([]b
 		return nil, errors.New("not found")
 	}
 	outputs := map[string]string{
-		"go":            "go version go1.24.0 windows/amd64",
+		"go":            "go version go1.25.13 windows/amd64",
 		"rustup":        "rustc 1.82.0 (test)",
 		"task":          "3.53.1",
-		"golangci-lint": "golangci-lint has version v2.1.5 built with go1.24.0",
+		"golangci-lint": "golangci-lint has version v2.12.2 built with go1.26.2",
 		"gcc":           "gcc.exe (GCC) 15.2.0",
 	}
 	return []byte(outputs[name]), nil
@@ -91,11 +91,11 @@ func writeManifest(t *testing.T) string {
 
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	contents := `{
-		"go": "1.24.0",
+		"go": "1.25.13",
 		"rust": "1.82.0",
 		"rust_target": "x86_64-pc-windows-gnu",
 		"task_major": 3,
-		"golangci_lint": "2.1.5"
+		"golangci_lint": "2.12.2"
 	}`
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)

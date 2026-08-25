@@ -281,6 +281,8 @@ A rejection contains a stable error code, current revision and map hash, and bou
 
 Different tiles can merge by server order. Different properties of one prefab can merge when their preconditions are independent. Competing replacements of the same tile stack or property cannot silently overwrite; the later stale precondition is rejected.
 
+The client retains the rejected operation only as an in-memory draft associated with the conflict. Refresh synchronizes the editor to the acknowledged authoritative projection while keeping that draft and conflict open. Discard removes the draft and conflict without sending a mutation. Rebuild creates a fresh operation from current authoritative before-values to the rejected draft's intended after-values, submits it through ordinary validation, and dismisses the old conflict only after acknowledgement. None of these actions bypass preconditions or provide force overwrite.
+
 ### Speculation and reconciliation
 
 Clients may speculatively render a submitted operation. Speculative changes are tracked separately from acknowledged state. On acceptance, the client advances the acknowledged revision and reapplies remaining compatible speculation. On rejection, it removes the rejected speculation, applies authoritative values, and reports a conflict through accessible UI state.
@@ -312,6 +314,8 @@ Presence messages include actor display metadata authorized for the session, cur
 - excluded from snapshots, operation logs, hashes, and acknowledgements.
 
 The server never accepts map mutation through a presence message.
+
+Viewport is a normalized, same-level rectangle clipped to current map dimensions. Tool preview is a closed protocol category describing behavior, not an arbitrary client tool name or serialized tool payload. Protocol v1 categories are `none`, `add`, `delete`, `replace`, `fill`, `move`, `select`, and `edit`; unknown categories are rejected.
 
 ## Protocol
 
@@ -353,6 +357,8 @@ Server messages are:
 
 Every envelope contains protocol version, message type, message ID, and session ID. Durable messages also contain document ID and revision metadata. Binary compression is disabled initially; bounded JSON keeps inspection and compatibility straightforward.
 
+After initial authentication, the server sends a dedicated opaque resumption credential scoped to the session and actor. It is short-lived, held only in client memory, never placed in a URL or persistent configuration, and rotated on every successful reconnect. Invitation and join credentials remain one-purpose and are erased after join. A reconnect presents the last acknowledged revision and the current resumption credential; authentication or protocol failure stops retries and clears the credential. When that revision predates retained replay history, the server sends `snapshot_required` and closes without a partial replay. The client fetches the authoritative snapshot through authenticated HTTP, installs the compatible non-rollback baseline, and reconnects again from its revision so operations accepted during the fallback window arrive through ordinary replay.
+
 ### Versioning
 
 Protocol version 1 begins when conformance fixtures and contracts are accepted. During implementation, pre-release versions use `0.x` in build metadata but still reject incompatible schemas. Additive optional fields require a defined absent meaning. Changed semantics require a new negotiated protocol version.
@@ -386,6 +392,8 @@ Hosted deployments use PostgreSQL with transactionally assigned document revisio
 Snapshots include schema/protocol version, document ID, revision, canonical map state, environment hash, map hash, and creation time. The service periodically snapshots by accepted operation count and elapsed time. Recovery loads the latest valid snapshot and replays subsequent events, then confirms the canonical hash before serving the document.
 
 Corrupt or discontinuous logs fail closed. Recovery never guesses a missing revision.
+
+Map resize remains unavailable in network sessions until it is implemented as an owner-only exclusive maintenance operation. The server accepts it only with no pending edits, records the new dimensions and boundary effects deterministically, produces a new canonical snapshot and hash, and blocks concurrent durable operations for the maintenance window.
 
 ## DMM/TGM fidelity and saving
 

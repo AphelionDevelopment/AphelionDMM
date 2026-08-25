@@ -22,6 +22,14 @@ type PresenceOverlay struct {
 	PixelX    int
 	PixelY    int
 	StyleSlot uint32
+	Selection *PresenceSelectionOverlay
+}
+
+type PresenceSelectionOverlay struct {
+	PixelX1 int
+	PixelY1 int
+	PixelX2 int
+	PixelY2 int
 }
 
 func BuildPresenceOverlays(entries []ObservedPresence, activeLevel, iconSize, participantCap int, timeout time.Duration, now time.Time) []PresenceOverlay {
@@ -48,13 +56,23 @@ func BuildPresenceOverlays(entries []ObservedPresence, activeLevel, iconSize, pa
 		if label == "" {
 			label = string(entry.Presence.ActorID)
 		}
-		overlays[index] = PresenceOverlay{
+		overlay := PresenceOverlay{
 			ActorID:   entry.Presence.ActorID,
 			Label:     label,
 			PixelX:    (entry.Presence.Cursor.X - 1) * iconSize,
 			PixelY:    (entry.Presence.Cursor.Y - 1) * iconSize,
 			StyleSlot: presenceStyleSlot(entry.Presence.ActorID),
 		}
+		selection := entry.Presence.Selection
+		if selection != nil && selection.Min.Z == activeLevel && selection.Max.Z == activeLevel {
+			overlay.Selection = &PresenceSelectionOverlay{
+				PixelX1: (selection.Min.X - 1) * iconSize,
+				PixelY1: (selection.Min.Y - 1) * iconSize,
+				PixelX2: selection.Max.X * iconSize,
+				PixelY2: selection.Max.Y * iconSize,
+			}
+		}
+		overlays[index] = overlay
 	}
 	return overlays
 }

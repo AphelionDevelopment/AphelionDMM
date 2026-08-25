@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 const (
@@ -22,14 +24,20 @@ const (
 )
 
 type ServiceConfig struct {
-	AllowedOrigins   []string
-	Build            string
-	Revision         string
-	OnWebSocketError func(error)
-	LaunchTokenTTL   time.Duration
-	JoinTokenTTL     time.Duration
-	PresenceTimeout  time.Duration
-	Now              func() time.Time
+	Store              SessionStore
+	Document           DocumentConfig
+	Limits             Limits
+	Telemetry          *collabtelemetry.Telemetry
+	AllowedOrigins     []string
+	Build              string
+	Revision           string
+	OnWebSocketError   func(error)
+	LaunchTokenTTL     time.Duration
+	JoinTokenTTL       time.Duration
+	ResumptionTokenTTL time.Duration
+	PresenceTimeout    time.Duration
+	PresenceInterval   time.Duration
+	Now                func() time.Time
 }
 
 type CreateSessionResponse struct {
@@ -43,6 +51,8 @@ type CreateSessionResponse struct {
 
 type tokenRecord struct {
 	launch             bool
+	resumption         bool
+	webSocketRedeemed  bool
 	sessionID          string
 	principal          Principal
 	expiresAt          time.Time
@@ -55,15 +65,23 @@ type sessionRecord struct {
 }
 
 type Service struct {
-	config   ServiceConfig
-	context  context.Context
-	cancel   context.CancelFunc
-	hub      *Hub
-	store    *MemoryStore
-	mutex    sync.RWMutex
-	tokens   map[string]tokenRecord
-	sessions map[string]sessionRecord
-	server   *http.ServeMux
+	config            ServiceConfig
+	context           context.Context
+	cancel            context.CancelFunc
+	hub               *Hub
+	store             SessionStore
+	documentConfig    DocumentConfig
+	limits            Limits
+	mutex             sync.RWMutex
+	tokens            map[string]tokenRecord
+	sessions          map[string]sessionRecord
+	recoveryErrors    map[model.DocumentID]error
+	activeConnections int
+	joinLimiter       *rateLimiter
+	durableLimiter    *rateLimiter
+	presenceLimiter   *rateLimiter
+	telemetry         *collabtelemetry.Telemetry
+	server            *http.ServeMux
 }
 
 func NewService(config ServiceConfig) *Service {
@@ -73,22 +91,45 @@ func NewService(config ServiceConfig) *Service {
 	if config.JoinTokenTTL <= 0 {
 		config.JoinTokenTTL = 15 * time.Minute
 	}
+	if config.ResumptionTokenTTL <= 0 {
+		config.ResumptionTokenTTL = 8 * time.Hour
+	}
 	if config.PresenceTimeout <= 0 {
 		config.PresenceTimeout = time.Minute
+	}
+	minimumPresenceInterval := time.Duration(protocol.MinPresenceIntervalMS) * time.Millisecond
+	maximumPresenceInterval := time.Duration(protocol.MaxPresenceIntervalMS) * time.Millisecond
+	if config.PresenceInterval < minimumPresenceInterval || config.PresenceInterval > maximumPresenceInterval {
+		config.PresenceInterval = 100 * time.Millisecond
 	}
 	if config.Now == nil {
 		config.Now = func() time.Time { return time.Now().UTC() }
 	}
 	serviceContext, cancel := context.WithCancel(context.Background())
+	store := config.Store
+	if store == nil {
+		store = NewMemoryStore()
+	}
+	limits := config.Limits.withDefaults()
+	if config.Document.Telemetry == nil {
+		config.Document.Telemetry = config.Telemetry
+	}
 	service := &Service{
-		config:   config,
-		context:  serviceContext,
-		cancel:   cancel,
-		hub:      NewHub(config.PresenceTimeout),
-		store:    NewMemoryStore(),
-		tokens:   make(map[string]tokenRecord),
-		sessions: make(map[string]sessionRecord),
-		server:   http.NewServeMux(),
+		config:          config,
+		context:         serviceContext,
+		cancel:          cancel,
+		hub:             NewHubWithTelemetry(config.PresenceTimeout, config.Telemetry),
+		store:           store,
+		documentConfig:  config.Document,
+		limits:          limits,
+		joinLimiter:     newRateLimiter(limits.JoinRate, limits.RateEntries),
+		durableLimiter:  newRateLimiter(limits.DurableRate, limits.RateEntries),
+		presenceLimiter: newRateLimiter(limits.PresenceRate, limits.RateEntries),
+		telemetry:       config.Telemetry,
+		tokens:          make(map[string]tokenRecord),
+		sessions:        make(map[string]sessionRecord),
+		recoveryErrors:  make(map[model.DocumentID]error),
+		server:          http.NewServeMux(),
 	}
 	service.routes()
 	go service.expirePresence(config.PresenceTimeout / 2)
@@ -128,7 +169,7 @@ func (service *Service) Shutdown(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return service.store.Close()
 }
 
 func (service *Service) NewLaunchToken() (string, error) {
@@ -177,8 +218,8 @@ func ValidateListenAddress(address string, allowNetwork bool) error {
 }
 
 func (service *Service) routes() {
-	service.server.HandleFunc("GET /v1/health/live", service.handleHealth)
-	service.server.HandleFunc("GET /v1/health/ready", service.handleHealth)
+	service.server.HandleFunc("GET /v1/health/live", service.handleLive)
+	service.server.HandleFunc("GET /v1/health/ready", service.handleReady)
 	service.server.HandleFunc("GET /v1/version", service.handleVersion)
 	service.server.HandleFunc("POST /v1/sessions", service.handleCreateSession)
 	service.server.HandleFunc("GET /v1/sessions/{session_id}", service.handleGetSession)
@@ -188,8 +229,29 @@ func (service *Service) routes() {
 	service.server.HandleFunc("GET /v1/collaboration", service.handleWebSocket)
 }
 
-func (service *Service) handleHealth(writer http.ResponseWriter, _ *http.Request) {
+func (service *Service) handleLive(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (service *Service) handleReady(writer http.ResponseWriter, _ *http.Request) {
+	service.mutex.RLock()
+	unavailable := len(service.recoveryErrors)
+	service.mutex.RUnlock()
+	if unavailable > 0 {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "unrecoverable_documents": unavailable})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (service *Service) setDocumentRecoveryError(documentID model.DocumentID, err error) {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if err == nil {
+		delete(service.recoveryErrors, documentID)
+		return
+	}
+	service.recoveryErrors[documentID] = err
 }
 
 func (service *Service) handleVersion(writer http.ResponseWriter, _ *http.Request) {
@@ -206,7 +268,7 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "invalid or redeemed launch token")
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, MaxHTTPBodyBytes)
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
 	var body struct {
 		Snapshot model.Snapshot `json:"snapshot"`
 	}
@@ -234,9 +296,26 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "invalid or redeemed launch token")
 		return
 	}
-	owner, err := StartDocument(service.context, body.Snapshot, service.store)
+	owner, err := startOrRecoverDocument(service.context, body.Snapshot, service.store, service.documentConfig)
 	if err != nil {
+		var recoveryError *RecoveryError
+		if errors.As(err, &recoveryError) {
+			service.setDocumentRecoveryError(recoveryError.DocumentID, recoveryError)
+		}
 		writeError(writer, http.StatusBadRequest, "invalid_snapshot", "snapshot is not valid")
+		return
+	}
+	service.setDocumentRecoveryError(body.Snapshot.DocumentID, nil)
+	current, err := owner.Snapshot(request.Context())
+	if err != nil {
+		_ = owner.Close(request.Context())
+		writeError(writer, http.StatusInternalServerError, "internal", "session recovery failed")
+		return
+	}
+	mapHash, err = current.Hash()
+	if err != nil {
+		_ = owner.Close(request.Context())
+		writeError(writer, http.StatusInternalServerError, "internal", "session recovery hash failed")
 		return
 	}
 	actorID, err := model.NewActorID()
@@ -272,7 +351,7 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 	service.sessions[sessionID] = sessionRecord{owner: owner}
 	service.mutex.Unlock()
 	writeJSON(writer, http.StatusCreated, CreateSessionResponse{
-		SessionID: sessionID, DocumentID: body.Snapshot.DocumentID, Revision: body.Snapshot.Revision, MapHash: mapHash, OwnerToken: ownerToken, OwnerTokenExpiresAt: ownerTokenExpiresAt,
+		SessionID: sessionID, DocumentID: current.DocumentID, Revision: current.Revision, MapHash: mapHash, OwnerToken: ownerToken, OwnerTokenExpiresAt: ownerTokenExpiresAt,
 	})
 }
 
@@ -318,12 +397,12 @@ func (service *Service) handleGetSnapshot(writer http.ResponseWriter, request *h
 
 func (service *Service) handleCreateJoinToken(writer http.ResponseWriter, request *http.Request) {
 	sessionID := request.PathValue("session_id")
-	principal, _, ok := service.authorize(request, sessionID)
-	if !ok || !principal.CanAdminister() {
+	authToken, _, ok := service.authorizeRecord(request, sessionID)
+	if !ok || authToken.resumption || !authToken.principal.CanAdminister() {
 		writeError(writer, http.StatusForbidden, "forbidden", "owner role is required")
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, MaxHTTPBodyBytes)
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
 	var body struct {
 		Role        Role   `json:"role"`
 		DisplayName string `json:"display_name"`
@@ -361,11 +440,16 @@ func (service *Service) handleExport(writer http.ResponseWriter, _ *http.Request
 }
 
 func (service *Service) authorize(request *http.Request, sessionID string) (Principal, sessionRecord, bool) {
+	token, session, ok := service.authorizeRecord(request, sessionID)
+	return token.principal, session, ok
+}
+
+func (service *Service) authorizeRecord(request *http.Request, sessionID string) (tokenRecord, sessionRecord, bool) {
 	service.mutex.RLock()
 	defer service.mutex.RUnlock()
 	token, tokenExists := service.tokens[bearerToken(request)]
 	session, sessionExists := service.sessions[sessionID]
-	return token.principal, session, tokenExists && !token.launch && token.sessionID == sessionID && sessionExists && service.config.Now().Before(token.expiresAt)
+	return token, session, tokenExists && !token.launch && token.sessionID == sessionID && sessionExists && service.config.Now().Before(token.expiresAt)
 }
 
 func (service *Service) redeemLaunchToken(token string) bool {
@@ -389,6 +473,28 @@ func (service *Service) issueToken(sessionID string, principal Principal) (strin
 	service.tokens[token] = tokenRecord{sessionID: sessionID, principal: principal, expiresAt: expiresAt}
 	service.mutex.Unlock()
 	return token, expiresAt, nil
+}
+
+func (service *Service) rotateResumptionToken(token, sessionID string, principal Principal) (string, time.Time, error) {
+	rotated, err := randomToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt := service.config.Now().Add(service.config.ResumptionTokenTTL)
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	record, exists := service.tokens[token]
+	if !exists || record.launch || record.webSocketRedeemed || record.sessionID != sessionID || record.principal.ActorID() != principal.ActorID() || !service.config.Now().Before(record.expiresAt) {
+		return "", time.Time{}, fmt.Errorf("session credential is invalid or already redeemed")
+	}
+	if record.resumption {
+		delete(service.tokens, token)
+	} else {
+		record.webSocketRedeemed = true
+		service.tokens[token] = record
+	}
+	service.tokens[rotated] = tokenRecord{resumption: true, sessionID: sessionID, principal: principal, expiresAt: expiresAt}
+	return rotated, expiresAt, nil
 }
 
 func randomToken() (string, error) {

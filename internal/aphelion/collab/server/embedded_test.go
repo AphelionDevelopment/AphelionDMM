@@ -105,3 +105,20 @@ func TestEmbeddedLaunchTokenIsScopedToSuppliedSnapshot(t *testing.T) {
 		t.Fatalf("correct snapshot status after mismatch = %d, want 201", accepted.StatusCode)
 	}
 }
+
+func TestEmbeddedUsesConfiguredStore(t *testing.T) {
+	t.Parallel()
+
+	value := NewMemoryStore()
+	embedded, err := StartEmbeddedWithConfig(context.Background(), testSnapshot(t, 1), EmbeddedConfig{
+		Store:    value,
+		Document: DocumentConfig{SnapshotOperationThreshold: 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = embedded.Shutdown(context.Background()) })
+	if embedded.service.store != value || embedded.service.documentConfig.SnapshotOperationThreshold != 5 {
+		t.Fatal("embedded service did not retain durable-store configuration")
+	}
+}

@@ -109,21 +109,21 @@ func TestCheckRejectsUnexpectedCommandOutput(t *testing.T) {
 
 func compatibleRunner() *fakeRunner {
 	return &fakeRunner{responses: map[string]runnerResponse{
-		commandKey("go", "version"): {output: "go version go1.24.0 windows/amd64"},
+		commandKey("go", "version"): {output: "go version go1.25.13 windows/amd64"},
 		commandKey("rustup", "run", "1.82.0-x86_64-pc-windows-gnu", "rustc", "--version"): {output: "rustc 1.82.0 (test)"},
 		commandKey("task", "--version"):        {output: "3.53.1"},
-		commandKey("golangci-lint", "version"): {output: "golangci-lint has version v2.1.5 built with go1.24.0"},
+		commandKey("golangci-lint", "version"): {output: "golangci-lint has version v2.12.2 built with go1.26.2"},
 		commandKey("gcc", "--version"):         {output: "gcc.exe (GCC) 15.2.0"},
 	}}
 }
 
 func testManifest() Manifest {
 	return Manifest{
-		Go:           "1.24.0",
+		Go:           "1.25.13",
 		Rust:         "1.82.0",
 		RustTarget:   "x86_64-pc-windows-gnu",
 		TaskMajor:    3,
-		GolangCILint: "2.1.5",
+		GolangCILint: "2.12.2",
 	}
 }
 

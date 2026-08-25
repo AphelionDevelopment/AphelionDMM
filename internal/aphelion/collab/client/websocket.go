@@ -74,16 +74,25 @@ func (transport *WebSocketTransport) Connect(ctx context.Context, request protoc
 	}
 	transport.mutex.Unlock()
 	dialContext, cancelDial := context.WithTimeout(ctx, transport.config.DialTimeout)
-	connection, _, err := websocket.Dial(dialContext, websocketURL, &websocket.DialOptions{
+	connection, response, err := websocket.Dial(dialContext, websocketURL, &websocket.DialOptions{
 		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + request.Token}, "Origin": []string{request.Origin}},
 		Subprotocols: []string{collaborationSubprotocol},
 	})
 	cancelDial()
 	if err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+			switch response.StatusCode {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				return fmt.Errorf("%w: HTTP %d", ErrAuthenticationDenied, response.StatusCode)
+			case http.StatusUpgradeRequired, http.StatusBadRequest:
+				return fmt.Errorf("%w: HTTP %d", ErrIncompatibleProtocol, response.StatusCode)
+			}
+		}
 		return fmt.Errorf("connect collaboration WebSocket: %w", err)
 	}
 	connection.SetReadLimit(protocol.MaxMessageBytes)
-	connectionContext, cancelConnection := context.WithCancel(ctx)
+	connectionContext, cancelConnection := context.WithCancel(context.WithoutCancel(ctx))
 	transport.mutex.Lock()
 	transport.connection = connection
 	transport.cancel = cancelConnection

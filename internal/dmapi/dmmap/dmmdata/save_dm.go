@@ -88,7 +88,7 @@ func (d DmmData) WriteDM(writer io.Writer) error {
 func toDMStr(key Key, prefabs Prefabs) string {
 	sb := strings.Builder{}
 
-	sb.WriteString(fmt.Sprintf("\"%s\" = (", key))
+	fmt.Fprintf(&sb, "\"%s\" = (", key)
 
 	for idx, prefab := range prefabs {
 		sb.WriteString(prefab.Path())

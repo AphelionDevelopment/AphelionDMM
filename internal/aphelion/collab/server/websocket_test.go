@@ -84,6 +84,134 @@ func TestWebSocketJoinPingPongAndGracefulClose(t *testing.T) {
 	}
 }
 
+func TestWebSocketRotatesSingleUseResumptionCredential(t *testing.T) {
+	t.Parallel()
+
+	_, created, testServer := startHTTPTestSession(t)
+	first, firstCredential := connectTestClientWithCredential(t, testServer.URL, created.SessionID, created.OwnerToken, 0)
+	if err := first.Close(websocket.StatusNormalClosure, "rotate credential"); err != nil {
+		t.Fatal(err)
+	}
+	second, secondCredential := connectTestClientWithCredential(t, testServer.URL, created.SessionID, firstCredential, 0)
+	defer func() { _ = second.CloseNow() }()
+	if secondCredential == "" || secondCredential == firstCredential {
+		t.Fatalf("rotated credential = %q, want a fresh non-empty value", secondCredential)
+	}
+	joinBody, err := json.Marshal(map[string]any{"role": RoleEditor, "display_name": "Denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", secondCredential, joinBody)
+	_ = joinResponse.Body.Close()
+	if joinResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("resumption credential administrative status = %d, want %d", joinResponse.StatusCode, http.StatusForbidden)
+	}
+
+	websocketURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/v1/collaboration"
+	for _, staleCredential := range []string{created.OwnerToken, firstCredential} {
+		stale, response, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+			HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + staleCredential}, "Origin": []string{"http://127.0.0.1"}},
+			Subprotocols: []string{WebSocketSubprotocol},
+		})
+		if stale != nil {
+			_ = stale.CloseNow()
+		}
+		if err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("reused credential dial = response %#v error %v, want HTTP 401", response, err)
+		}
+	}
+}
+
+func TestWebSocketRequiresSnapshotWhenAcknowledgedRevisionPredatesRetainedHistory(t *testing.T) {
+	t.Parallel()
+
+	service, created, testServer := startHTTPTestSession(t)
+	record := service.sessions[created.SessionID]
+	initial, err := record.owner.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := record.owner.Submit(context.Background(), testOperation(t, initial, 1)); err != nil {
+		t.Fatal(err)
+	}
+	compacted, err := record.owner.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SaveSnapshot(context.Background(), compacted); err != nil {
+		t.Fatal(err)
+	}
+
+	websocketURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/v1/collaboration"
+	connection, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + created.OwnerToken}, "Origin": []string{"http://127.0.0.1"}},
+		Subprotocols: []string{WebSocketSubprotocol},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.CloseNow() }()
+	writeClientEnvelope(t, connection, protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "stale-join", SessionID: created.SessionID, Type: protocol.ClientJoin}, protocol.JoinPayload{JoinToken: created.OwnerToken, AcknowledgedRevision: initial.Revision})
+	joined := readServerEnvelope(t, connection)
+	if joined.Envelope.Type != protocol.ServerJoined {
+		t.Fatalf("first message = %q, want joined", joined.Envelope.Type)
+	}
+	resumptionToken := joined.Payload.(*protocol.JoinedPayload).ResumptionToken
+	notice := readServerEnvelope(t, connection)
+	if notice.Envelope.Type != protocol.ServerSessionNotice || notice.Payload.(*protocol.SessionNoticePayload).Code != protocol.NoticeSnapshotRequired {
+		t.Fatalf("fallback message = %#v, want snapshot-required notice", notice)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, _, err = connection.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusServiceRestart {
+		t.Fatalf("fallback close status = %d error %v, want %d", websocket.CloseStatus(err), err, websocket.StatusServiceRestart)
+	}
+	request, err := http.NewRequest(http.MethodGet, testServer.URL+"/v1/sessions/"+created.SessionID+"/snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+resumptionToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resumption snapshot status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var fetched model.Snapshot
+	if err := json.NewDecoder(response.Body).Decode(&fetched); err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Revision != compacted.Revision {
+		t.Fatalf("resumption snapshot revision = %d, want %d", fetched.Revision, compacted.Revision)
+	}
+}
+
+func connectTestClientWithCredential(t *testing.T, baseURL, sessionID, token string, acknowledged model.Revision) (*websocket.Conn, string) {
+	t.Helper()
+	websocketURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/v1/collaboration"
+	connection, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + token}, "Origin": []string{"http://127.0.0.1"}},
+		Subprotocols: []string{WebSocketSubprotocol},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeClientEnvelope(t, connection, protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "join", SessionID: sessionID, Type: protocol.ClientJoin}, protocol.JoinPayload{JoinToken: token, AcknowledgedRevision: acknowledged})
+	joined := readServerEnvelope(t, connection)
+	if joined.Envelope.Type != protocol.ServerJoined {
+		t.Fatalf("first message = %q, want joined", joined.Envelope.Type)
+	}
+	payload := joined.Payload.(*protocol.JoinedPayload)
+	if acknowledged == 0 {
+		_ = readServerEnvelopeType(t, connection, protocol.ServerReplayComplete)
+		_ = readServerEnvelopeType(t, connection, protocol.ServerPresenceSnapshot)
+	}
+	return connection, payload.ResumptionToken
+}
+
 func readServerEnvelopeType(t *testing.T, connection *websocket.Conn, wanted protocol.ServerType) protocol.DecodedServer {
 	t.Helper()
 	for {
@@ -96,7 +224,13 @@ func readServerEnvelopeType(t *testing.T, connection *websocket.Conn, wanted pro
 
 func startHTTPTestSession(t *testing.T) (*Service, CreateSessionResponse, *httptest.Server) {
 	t.Helper()
-	service := NewService(ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}, OnWebSocketError: func(err error) { t.Logf("WebSocket server error: %v", err) }})
+	return startHTTPTestSessionWithConfig(t, ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}})
+}
+
+func startHTTPTestSessionWithConfig(t *testing.T, config ServiceConfig) (*Service, CreateSessionResponse, *httptest.Server) {
+	t.Helper()
+	config.OnWebSocketError = func(err error) { t.Logf("WebSocket server error: %v", err) }
+	service := NewService(config)
 	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
 	launchToken, err := service.NewLaunchToken()
 	if err != nil {

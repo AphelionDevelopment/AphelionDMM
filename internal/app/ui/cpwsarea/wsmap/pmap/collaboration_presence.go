@@ -50,10 +50,24 @@ func (p *PaneMap) showCollaborationPresence() {
 		min, max := presenceScreenBounds(overlay, dmmap.WorldIconSize, camera.Scale, camera.ShiftX, camera.ShiftY, p.canvasControl.PosMin(), p.canvasControl.PosMax())
 		styleColor := collaborationPresenceColors[int(overlay.StyleSlot)%len(collaborationPresenceColors)]
 		drawList.AddRectV(min, max, styleColor, 0, imgui.DrawFlagsNone, collaborationPresenceWidth)
+		if overlay.Selection != nil {
+			selectionMin, selectionMax := presenceSelectionScreenBounds(*overlay.Selection, camera.Scale, camera.ShiftX, camera.ShiftY, p.canvasControl.PosMin(), p.canvasControl.PosMax())
+			drawList.AddRectV(selectionMin, selectionMax, styleColor, 0, imgui.DrawFlagsNone, collaborationPresenceWidth)
+		}
 		labelPosition := min.Plus(imgui.Vec2{X: 3, Y: 2})
 		drawList.AddText(labelPosition.Plus(imgui.Vec2{X: 1, Y: 1}), collaborationPresenceTextShadow, overlay.Label)
 		drawList.AddText(labelPosition, styleColor, overlay.Label)
 	}
+}
+
+func presenceSelectionScreenBounds(selection collabui.PresenceSelectionOverlay, scale, shiftX, shiftY float32, canvasMin, canvasMax imgui.Vec2) (imgui.Vec2, imgui.Vec2) {
+	return imgui.Vec2{
+			X: canvasMin.X + (float32(selection.PixelX1)+shiftX)*scale,
+			Y: canvasMax.Y - (float32(selection.PixelY2)+shiftY)*scale,
+		}, imgui.Vec2{
+			X: canvasMin.X + (float32(selection.PixelX2)+shiftX)*scale,
+			Y: canvasMax.Y - (float32(selection.PixelY1)+shiftY)*scale,
+		}
 }
 
 func presenceScreenBounds(overlay collabui.PresenceOverlay, iconSize int, scale, shiftX, shiftY float32, canvasMin, canvasMax imgui.Vec2) (imgui.Vec2, imgui.Vec2) {

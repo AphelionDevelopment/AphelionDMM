@@ -67,22 +67,37 @@ func (s *Storage) Push(command Command) {
 }
 
 func (s *Storage) Undo() {
-	s.UndoV(s.currentStackId)
+	s.UndoAsyncV(s.currentStackId, nil)
 }
 
 func (s *Storage) UndoV(id string) {
-	if stack, ok := s.commandStacks[id]; ok {
-		logStackAction(stack, "undo")
+	s.UndoAsyncV(id, nil)
+}
 
-		if len(stack.undo) == 0 {
-			log.Print("unable to undo empty stack")
-			return
-		}
+func (s *Storage) UndoAsync(complete func(error)) bool {
+	return s.UndoAsyncV(s.currentStackId, complete)
+}
 
-		s.undo(stack)
-	} else {
-		logNoStackAvailable("undo")
+func (s *Storage) UndoAsyncV(id string, complete func(error)) bool {
+	stack, ok := s.commandStacks[id]
+	if !ok || len(stack.undo) == 0 || stack.busy {
+		return false
 	}
+	command := stack.undo[len(stack.undo)-1]
+	stack.busy = true
+	command.RunAsync(func(reversed Command, err error) {
+		stack.busy = false
+		current, exists := s.commandStacks[id]
+		if err == nil && exists && current == stack && len(stack.undo) > 0 && stack.undo[len(stack.undo)-1].id == command.id {
+			stack.undo = stack.undo[:len(stack.undo)-1]
+			stack.redo = append(stack.redo, reversed)
+			stack.balance--
+		}
+		if complete != nil {
+			complete(err)
+		}
+	})
+	return true
 }
 
 func (s *Storage) undo(stack *commandStack) {
@@ -93,22 +108,37 @@ func (s *Storage) undo(stack *commandStack) {
 }
 
 func (s *Storage) Redo() {
-	s.RedoV(s.currentStackId)
+	s.RedoAsyncV(s.currentStackId, nil)
 }
 
 func (s *Storage) RedoV(id string) {
-	if stack, ok := s.commandStacks[id]; ok {
-		logStackAction(stack, "redo")
+	s.RedoAsyncV(id, nil)
+}
 
-		if len(stack.redo) == 0 {
-			log.Print("unable to read empty stack")
-			return
-		}
+func (s *Storage) RedoAsync(complete func(error)) bool {
+	return s.RedoAsyncV(s.currentStackId, complete)
+}
 
-		s.redo(stack)
-	} else {
-		logNoStackAvailable("redo")
+func (s *Storage) RedoAsyncV(id string, complete func(error)) bool {
+	stack, ok := s.commandStacks[id]
+	if !ok || len(stack.redo) == 0 || stack.busy {
+		return false
 	}
+	command := stack.redo[len(stack.redo)-1]
+	stack.busy = true
+	command.RunAsync(func(reversed Command, err error) {
+		stack.busy = false
+		current, exists := s.commandStacks[id]
+		if err == nil && exists && current == stack && len(stack.redo) > 0 && stack.redo[len(stack.redo)-1].id == command.id {
+			stack.redo = stack.redo[:len(stack.redo)-1]
+			stack.undo = append(stack.undo, reversed)
+			stack.balance++
+		}
+		if complete != nil {
+			complete(err)
+		}
+	})
+	return true
 }
 
 func (s *Storage) redo(stack *commandStack) {
@@ -124,7 +154,7 @@ func (s *Storage) HasUndo() bool {
 
 func (s *Storage) HasUndoV(id string) bool {
 	if stack, ok := s.commandStacks[id]; ok {
-		return len(stack.undo) > 0
+		return !stack.busy && len(stack.undo) > 0
 	}
 	return false
 }
@@ -135,7 +165,7 @@ func (s *Storage) HasRedo() bool {
 
 func (s *Storage) HasRedoV(id string) bool {
 	if stack, ok := s.commandStacks[id]; ok {
-		return len(stack.redo) > 0
+		return !stack.busy && len(stack.redo) > 0
 	}
 	return false
 }
@@ -168,6 +198,12 @@ func (s *Storage) Balance(id string) {
 
 	if stack, ok := s.commandStacks[id]; ok {
 		logStackAction(stack, "balance")
+		for _, command := range append(stack.undo, stack.redo...) {
+			if command.undoAsync != nil || command.redoAsync != nil {
+				log.Print("skip balancing asynchronous command stack")
+				return
+			}
+		}
 
 		for {
 			if stack.balance == 0 {
@@ -194,6 +230,7 @@ type commandStack struct {
 	balance int
 	undo    []Command
 	redo    []Command
+	busy    bool
 
 	// Field stores a command id at the moment when the stack was forcefully balanced.
 	balanceCommandId uint64

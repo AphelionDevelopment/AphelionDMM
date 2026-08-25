@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,27 +24,56 @@ import (
 
 const maxSessionResponseBytes = 256 << 20
 
+var errSnapshotFallbackInstalled = errors.New("authoritative snapshot installed; reconnect again for replay")
+
 type SessionClientConfig struct {
-	HTTPTimeout time.Duration
-	Transport   collabclient.TransportConfig
-	Now         func() time.Time
+	HTTPTimeout  time.Duration
+	Transport    collabclient.TransportConfig
+	Reconnect    collabclient.ReconnectPolicy
+	Now          func() time.Time
+	Schedule     func(time.Duration, func()) func()
+	NewTransport func() SessionTransport
 }
 
 type SessionClient struct {
 	config SessionClientConfig
 	http   *http.Client
 
-	mutex        sync.Mutex
-	joining      bool
-	transport    *collabclient.WebSocketTransport
-	network      *collabclient.NetworkExecutor
-	machine      *collabclient.StateMachine
-	sessionID    string
-	role         string
-	revision     model.Revision
-	participants map[model.ActorID]ObservedPresence
-	lastErr      error
+	mutex               sync.Mutex
+	joining             bool
+	transport           sessionTransport
+	network             *collabclient.NetworkExecutor
+	machine             *collabclient.StateMachine
+	sessionID           string
+	role                string
+	revision            model.Revision
+	participants        map[model.ActorID]ObservedPresence
+	presenceInterval    time.Duration
+	presenceSequence    uint64
+	nextPresenceAt      time.Time
+	pendingPresence     *protocol.PresenceUpdatePayload
+	cancelPresence      func()
+	presenceGeneration  uint64
+	resumptionToken     string
+	resumptionExpiresAt time.Time
+	baseURL             string
+	origin              string
+	documentID          model.DocumentID
+	actorID             model.ActorID
+	cancelReconnect     context.CancelFunc
+	reconnectContext    context.Context
+	reconnecting        bool
+	newTransport        func() SessionTransport
+	lastErr             error
 }
+
+// SessionTransport is a collaboration transport whose terminal result can be observed by the session lifecycle.
+type SessionTransport interface {
+	collabclient.Transport
+	Wait(context.Context) error
+}
+
+type sessionTransport = SessionTransport
 
 func NewSessionClient(config SessionClientConfig) *SessionClient {
 	if config.HTTPTimeout <= 0 {
@@ -52,7 +82,18 @@ func NewSessionClient(config SessionClientConfig) *SessionClient {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &SessionClient{config: config, machine: collabclient.NewStateMachine(), participants: make(map[model.ActorID]ObservedPresence), http: &http.Client{Timeout: config.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+	if config.Schedule == nil {
+		config.Schedule = func(delay time.Duration, job func()) func() {
+			timer := time.AfterFunc(delay, job)
+			return func() { timer.Stop() }
+		}
+	}
+	if config.NewTransport == nil {
+		config.NewTransport = func() SessionTransport {
+			return collabclient.NewWebSocketTransport(config.Transport)
+		}
+	}
+	return &SessionClient{config: config, machine: collabclient.NewStateMachine(), participants: make(map[model.ActorID]ObservedPresence), newTransport: config.NewTransport, http: &http.Client{Timeout: config.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}}
 }
@@ -108,17 +149,41 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 	client.machine = collabclient.NewStateMachine()
 	_ = client.machine.Apply(collabclient.EventConnect)
 	client.sessionID = invitation.SessionID
+	client.baseURL = invitation.BaseURL
+	client.origin = invitation.Origin
 	client.role = ""
 	client.revision = 0
 	client.participants = make(map[model.ActorID]ObservedPresence)
+	client.stopPresencePublicationLocked()
+	client.presenceInterval = 0
+	client.presenceSequence = 0
+	client.nextPresenceAt = time.Time{}
+	client.resumptionToken = ""
+	client.resumptionExpiresAt = time.Time{}
 	client.lastErr = nil
+	client.reconnecting = false
+	if client.cancelReconnect != nil {
+		client.cancelReconnect()
+	}
+	reconnectContext, cancelReconnect := context.WithCancel(context.Background())
+	client.reconnectContext = reconnectContext
+	client.cancelReconnect = cancelReconnect
 	machine := client.machine
 	client.mutex.Unlock()
 	joined := false
 	defer func() {
 		if !joined {
 			client.mutex.Lock()
-			client.joining = false
+			if client.machine == machine {
+				client.joining = false
+				if client.cancelReconnect != nil {
+					client.cancelReconnect()
+					client.cancelReconnect = nil
+				}
+				client.reconnectContext = nil
+				client.resumptionToken = ""
+				client.resumptionExpiresAt = time.Time{}
+			}
 			client.mutex.Unlock()
 		}
 	}()
@@ -128,10 +193,10 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 		client.recordConnectionFailure(machine, err)
 		return err
 	}
-	transport := collabclient.NewWebSocketTransport(client.config.Transport)
+	transport := client.newTransport()
 	var routeMutex sync.Mutex
 	var network *collabclient.NetworkExecutor
-	ready := make(chan struct{}, 1)
+	ready := make(chan model.Revision, 1)
 	errorsFound := make(chan error, 1)
 	receive := func(envelope protocol.ServerEnvelope) {
 		decoded, decodeErr := decodeServerEnvelope(envelope)
@@ -173,9 +238,8 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 				nonBlockingError(errorsFound, fmt.Errorf("replay completion does not match client revision"))
 				return
 			}
-			client.recordSynchronized(machine, payload.Revision)
 			select {
-			case ready <- struct{}{}:
+			case ready <- payload.Revision:
 			default:
 			}
 		case protocol.ServerPresenceSnapshot:
@@ -189,8 +253,9 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 		return err
 	}
 	invitation.Token = ""
+	var synchronizedRevision model.Revision
 	select {
-	case <-ready:
+	case synchronizedRevision = <-ready:
 	case joinErr := <-errorsFound:
 		_ = transport.Close(websocket.StatusPolicyViolation, "join failed")
 		client.recordConnectionFailure(machine, joinErr)
@@ -212,6 +277,7 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 	client.network = joinedNetwork
 	client.joining = false
 	client.mutex.Unlock()
+	client.recordSynchronized(machine, synchronizedRevision)
 	joined = true
 	go client.monitorTransport(machine, transport, joinedNetwork)
 	return nil
@@ -226,6 +292,22 @@ func (client *SessionClient) Leave(context.Context) error {
 	client.joining = false
 	machine := client.machine
 	client.participants = make(map[model.ActorID]ObservedPresence)
+	client.stopPresencePublicationLocked()
+	client.presenceInterval = 0
+	client.presenceSequence = 0
+	client.nextPresenceAt = time.Time{}
+	client.resumptionToken = ""
+	client.resumptionExpiresAt = time.Time{}
+	client.baseURL = ""
+	client.origin = ""
+	client.documentID = ""
+	client.actorID = ""
+	client.reconnecting = false
+	if client.cancelReconnect != nil {
+		client.cancelReconnect()
+		client.cancelReconnect = nil
+	}
+	client.reconnectContext = nil
 	client.mutex.Unlock()
 	if machine != nil && machine.State() != collabclient.StateClosed {
 		_ = machine.Apply(collabclient.EventClose)
@@ -258,10 +340,82 @@ func (client *SessionClient) CollaborationExecutor() executor.Executor {
 	return client.network
 }
 
+func (client *SessionClient) RefreshConflict(ctx context.Context, operationID model.OperationID) (model.Snapshot, error) {
+	network, _, err := client.conflictExecutor()
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	return network.RefreshConflict(ctx, operationID)
+}
+
+func (client *SessionClient) DiscardConflict(ctx context.Context, operationID model.OperationID) (model.Snapshot, error) {
+	network, machine, err := client.conflictExecutor()
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	snapshot, err := network.DiscardConflict(ctx, operationID)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	client.recordConflictResolution(machine, network, snapshot)
+	return snapshot, nil
+}
+
+func (client *SessionClient) RebuildConflict(ctx context.Context, operationID model.OperationID, complete func(model.AcceptedOperation, error)) error {
+	if complete == nil {
+		return fmt.Errorf("conflict rebuild completion callback is nil")
+	}
+	network, machine, err := client.conflictExecutor()
+	if err != nil {
+		return err
+	}
+	operation, err := network.BuildConflictRebuild(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	return network.ExecuteAsync(ctx, operation, func(accepted model.AcceptedOperation, executeErr error) {
+		if executeErr == nil {
+			network.DismissConflict(operationID)
+			if snapshot, snapshotErr := network.Snapshot(context.Background()); snapshotErr != nil {
+				executeErr = snapshotErr
+			} else {
+				client.recordConflictResolution(machine, network, snapshot)
+			}
+		}
+		complete(accepted, executeErr)
+	})
+}
+
+func (client *SessionClient) conflictExecutor() (*collabclient.NetworkExecutor, *collabclient.StateMachine, error) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if client.network == nil || client.machine == nil {
+		return nil, nil, fmt.Errorf("collaboration session is not connected")
+	}
+	return client.network, client.machine, nil
+}
+
+func (client *SessionClient) recordConflictResolution(machine *collabclient.StateMachine, network *collabclient.NetworkExecutor, snapshot model.Snapshot) {
+	client.mutex.Lock()
+	if client.machine != machine || client.network != network {
+		client.mutex.Unlock()
+		return
+	}
+	client.revision = snapshot.Revision
+	client.mutex.Unlock()
+	if len(network.Conflicts()) == 0 && machine.State() == collabclient.StateConflict {
+		_ = machine.Apply(collabclient.EventResolved)
+	}
+}
+
 func (client *SessionClient) Status() SessionStatus {
 	client.mutex.Lock()
 	machine := client.machine
 	status := SessionStatus{SessionID: client.sessionID, Role: client.role, Revision: client.revision, Err: client.lastErr}
+	if client.resumptionToken != "" {
+		status.SensitiveValues = []string{client.resumptionToken}
+		status.ReconnectReady = !client.reconnecting && client.config.Now().Before(client.resumptionExpiresAt)
+	}
 	status.Participants = make([]protocol.ParticipantPresence, 0, len(client.participants))
 	for _, observed := range client.participants {
 		status.Participants = append(status.Participants, observed.Presence)
@@ -285,23 +439,119 @@ func (client *SessionClient) ObservedPresence() []ObservedPresence {
 	result := make([]ObservedPresence, 0, len(client.participants))
 	for _, observed := range client.participants {
 		copy := observed
-		if observed.Presence.Cursor != nil {
-			cursor := *observed.Presence.Cursor
-			copy.Presence.Cursor = &cursor
-		}
+		copy.Presence = cloneParticipantPresence(observed.Presence)
 		result = append(result, copy)
 	}
 	return result
 }
 
+func (client *SessionClient) PublishPresence(ctx context.Context, cursor *model.Coord, selection *protocol.PresenceSelection, status string) error {
+	if status == "" || len(status) > protocol.MaxIdentifierBytes {
+		return fmt.Errorf("collaboration presence status is invalid")
+	}
+	if cursor != nil && (cursor.X < 1 || cursor.Y < 1 || cursor.Z < 1) {
+		return fmt.Errorf("collaboration presence cursor coordinates must be positive")
+	}
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if client.transport == nil || client.sessionID == "" || client.presenceInterval <= 0 {
+		return collabclient.ErrTransportNotConnected
+	}
+	now := client.config.Now()
+	payload := clonePresencePayload(protocol.PresenceUpdatePayload{Cursor: cursor, Selection: selection, Status: status})
+	if now.Before(client.nextPresenceAt) {
+		client.pendingPresence = &payload
+		if client.cancelPresence == nil {
+			generation := client.presenceGeneration
+			client.cancelPresence = client.config.Schedule(client.nextPresenceAt.Sub(now), func() {
+				client.flushPendingPresence(generation)
+			})
+		}
+		return nil
+	}
+	client.clearPendingPresenceLocked()
+	return client.sendPresenceLocked(ctx, payload, now)
+}
+
+func (client *SessionClient) flushPendingPresence(generation uint64) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if generation != client.presenceGeneration {
+		return
+	}
+	client.cancelPresence = nil
+	if client.pendingPresence == nil || client.transport == nil || client.presenceInterval <= 0 {
+		client.pendingPresence = nil
+		return
+	}
+	now := client.config.Now()
+	if now.Before(client.nextPresenceAt) {
+		client.cancelPresence = client.config.Schedule(client.nextPresenceAt.Sub(now), func() {
+			client.flushPendingPresence(generation)
+		})
+		return
+	}
+	payload := clonePresencePayload(*client.pendingPresence)
+	client.pendingPresence = nil
+	if err := client.sendPresenceLocked(context.Background(), payload, now); err != nil {
+		client.lastErr = err
+	}
+}
+
+func (client *SessionClient) sendPresenceLocked(ctx context.Context, payload protocol.PresenceUpdatePayload, now time.Time) error {
+	sequence := client.presenceSequence + 1
+	payload.Sequence = sequence
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	envelope := protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: fmt.Sprintf("presence-%d", sequence), SessionID: client.sessionID, Type: protocol.ClientPresenceUpdate, Payload: encoded}
+	if err := client.transport.Send(ctx, envelope); err != nil {
+		return err
+	}
+	client.presenceSequence = sequence
+	client.nextPresenceAt = now.Add(client.presenceInterval)
+	return nil
+}
+
+func (client *SessionClient) clearPendingPresenceLocked() {
+	if client.cancelPresence != nil {
+		client.cancelPresence()
+		client.cancelPresence = nil
+	}
+	client.pendingPresence = nil
+}
+
+func (client *SessionClient) stopPresencePublicationLocked() {
+	client.clearPendingPresenceLocked()
+	client.presenceGeneration++
+}
+
+func clonePresencePayload(payload protocol.PresenceUpdatePayload) protocol.PresenceUpdatePayload {
+	if payload.Cursor != nil {
+		cursor := *payload.Cursor
+		payload.Cursor = &cursor
+	}
+	if payload.Selection != nil {
+		selection := *payload.Selection
+		payload.Selection = &selection
+	}
+	return payload
+}
+
 func (client *SessionClient) recordJoined(machine *collabclient.StateMachine, payload *protocol.JoinedPayload) {
-	if machine.State() == collabclient.StateConnecting {
+	if machine.State() == collabclient.StateConnecting || machine.State() == collabclient.StateReconnecting {
 		_ = machine.Apply(collabclient.EventConnected)
 	}
 	client.mutex.Lock()
 	if client.machine == machine {
 		client.role = payload.Role
 		client.revision = payload.Revision
+		client.presenceInterval = time.Duration(payload.PresenceIntervalMS) * time.Millisecond
+		client.resumptionToken = payload.ResumptionToken
+		client.resumptionExpiresAt = payload.ResumptionTokenExpiresAt
+		client.documentID = payload.DocumentID
+		client.actorID = payload.ActorID
 	}
 	client.mutex.Unlock()
 }
@@ -348,7 +598,7 @@ func (client *SessionClient) recordPresenceSnapshot(payload *protocol.PresenceSn
 func (client *SessionClient) recordPresenceUpdate(payload *protocol.ServerPresenceUpdatePayload) {
 	client.mutex.Lock()
 	defer client.mutex.Unlock()
-	participant := protocol.ParticipantPresence{ActorID: payload.ActorID, DisplayName: payload.DisplayName, Sequence: payload.Sequence, Cursor: payload.Cursor, Status: payload.Status}
+	participant := protocol.ParticipantPresence{ActorID: payload.ActorID, DisplayName: payload.DisplayName, Sequence: payload.Sequence, Cursor: payload.Cursor, Selection: payload.Selection, Status: payload.Status}
 	client.participants[payload.ActorID] = ObservedPresence{Presence: cloneParticipantPresence(participant), ObservedAt: client.config.Now()}
 }
 
@@ -364,20 +614,229 @@ func (client *SessionClient) recordConnectionFailure(machine *collabclient.State
 	if client.machine == machine {
 		client.lastErr = err
 		client.participants = make(map[model.ActorID]ObservedPresence)
+		client.stopPresencePublicationLocked()
+		client.presenceInterval = 0
 	}
 	client.mutex.Unlock()
 }
 
-func (client *SessionClient) monitorTransport(machine *collabclient.StateMachine, transport *collabclient.WebSocketTransport, network *collabclient.NetworkExecutor) {
+func (client *SessionClient) monitorTransport(machine *collabclient.StateMachine, transport sessionTransport, network *collabclient.NetworkExecutor) {
 	err := transport.Wait(context.Background())
-	network.Terminate(err)
+	client.mutex.Lock()
+	current := client.machine == machine && client.transport == transport && client.network == network
+	client.mutex.Unlock()
+	if !current || machine.State() == collabclient.StateClosed {
+		return
+	}
+	network.Suspend(err)
 	client.recordConnectionFailure(machine, err)
+	_ = client.startReconnect(machine, network)
+}
+
+func (client *SessionClient) RetryReconnect() error {
+	client.mutex.Lock()
+	machine, network := client.machine, client.network
+	if machine == nil || machine.State() != collabclient.StateReconnecting {
+		client.mutex.Unlock()
+		return fmt.Errorf("collaboration session is not awaiting reconnect")
+	}
+	if client.reconnecting {
+		client.mutex.Unlock()
+		return ErrReconnectInProgress
+	}
+	if client.resumptionToken == "" || !client.config.Now().Before(client.resumptionExpiresAt) {
+		client.resumptionToken = ""
+		client.resumptionExpiresAt = time.Time{}
+		client.mutex.Unlock()
+		return collabclient.ErrAuthenticationDenied
+	}
+	if network == nil || client.reconnectContext == nil {
+		client.mutex.Unlock()
+		return fmt.Errorf("collaboration reconnect is unavailable")
+	}
+	client.mutex.Unlock()
+	return client.startReconnect(machine, network)
+}
+
+func (client *SessionClient) startReconnect(machine *collabclient.StateMachine, network *collabclient.NetworkExecutor) error {
+	client.mutex.Lock()
+	if client.machine != machine || client.network != network || client.reconnectContext == nil || machine.State() != collabclient.StateReconnecting {
+		client.mutex.Unlock()
+		return fmt.Errorf("collaboration reconnect is unavailable")
+	}
+	if client.reconnecting {
+		client.mutex.Unlock()
+		return ErrReconnectInProgress
+	}
+	client.reconnecting = true
+	ctx := client.reconnectContext
+	client.mutex.Unlock()
+	go client.runReconnect(ctx, machine, network)
+	return nil
+}
+
+func (client *SessionClient) runReconnect(ctx context.Context, machine *collabclient.StateMachine, network *collabclient.NetworkExecutor) {
+	err := client.config.Reconnect.Reconnect(ctx, client.Status().Revision, func(attemptContext context.Context, _ model.Revision) error {
+		current, snapshotErr := network.Snapshot(attemptContext)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		return client.reconnectAttempt(attemptContext, machine, network, current.Revision)
+	})
+	client.mutex.Lock()
+	if client.machine == machine {
+		client.reconnecting = false
+		if err != nil && (errors.Is(err, collabclient.ErrAuthenticationDenied) || errors.Is(err, collabclient.ErrIncompatibleProtocol)) {
+			client.resumptionToken = ""
+			client.resumptionExpiresAt = time.Time{}
+		}
+		if err != nil {
+			client.lastErr = err
+		}
+	}
+	client.mutex.Unlock()
+}
+
+func (client *SessionClient) reconnectAttempt(ctx context.Context, machine *collabclient.StateMachine, network *collabclient.NetworkExecutor, acknowledged model.Revision) error {
+	client.mutex.Lock()
+	if client.machine != machine || client.network != network || machine.State() == collabclient.StateClosed {
+		client.mutex.Unlock()
+		return context.Canceled
+	}
+	token := client.resumptionToken
+	expiresAt := client.resumptionExpiresAt
+	baseURL, origin, sessionID := client.baseURL, client.origin, client.sessionID
+	documentID, actorID := client.documentID, client.actorID
+	client.mutex.Unlock()
+	if token == "" || !client.config.Now().Before(expiresAt) {
+		return collabclient.PermanentReconnectError(collabclient.ErrAuthenticationDenied)
+	}
+	transport := client.newTransport()
+	if err := network.Resume(transport); err != nil {
+		return err
+	}
+	ready := make(chan model.Revision, 1)
+	errorsFound := make(chan error, 1)
+	receive := func(envelope protocol.ServerEnvelope) {
+		decoded, err := decodeServerEnvelope(envelope)
+		if err != nil {
+			nonBlockingError(errorsFound, collabclient.PermanentReconnectError(collabclient.ErrIncompatibleProtocol))
+			return
+		}
+		switch decoded.Envelope.Type {
+		case protocol.ServerJoined:
+			payload := decoded.Payload.(*protocol.JoinedPayload)
+			if payload.DocumentID != documentID || payload.ActorID != actorID {
+				nonBlockingError(errorsFound, collabclient.PermanentReconnectError(collabclient.ErrAuthenticationDenied))
+				return
+			}
+			client.recordJoined(machine, payload)
+		case protocol.ServerOperationAccepted, protocol.ServerOperationRejected:
+			network.Receive(envelope)
+			client.recordOperation(machine, network, decoded.Envelope.Type)
+		case protocol.ServerReplayComplete:
+			payload := decoded.Payload.(*protocol.ReplayCompletePayload)
+			current, snapshotErr := network.Snapshot(context.Background())
+			currentHash, hashErr := current.Hash()
+			if snapshotErr != nil || hashErr != nil || current.Revision != payload.Revision || currentHash != payload.MapHash {
+				nonBlockingError(errorsFound, fmt.Errorf("replay completion does not match client revision"))
+				return
+			}
+			select {
+			case ready <- payload.Revision:
+			default:
+			}
+		case protocol.ServerPresenceSnapshot:
+			client.recordPresenceSnapshot(decoded.Payload.(*protocol.PresenceSnapshotPayload))
+		case protocol.ServerPresenceUpdate:
+			client.recordPresenceUpdate(decoded.Payload.(*protocol.ServerPresenceUpdatePayload))
+		case protocol.ServerSessionNotice:
+			payload := decoded.Payload.(*protocol.SessionNoticePayload)
+			if payload.Code != protocol.NoticeSnapshotRequired {
+				return
+			}
+			if snapshotErr := client.installReconnectSnapshot(ctx, network); snapshotErr != nil {
+				if errors.Is(snapshotErr, collabclient.ErrAuthenticationDenied) {
+					snapshotErr = collabclient.PermanentReconnectError(snapshotErr)
+				}
+				nonBlockingError(errorsFound, snapshotErr)
+				return
+			}
+			nonBlockingError(errorsFound, errSnapshotFallbackInstalled)
+		}
+	}
+	if err := transport.Connect(ctx, protocol.JoinRequest{BaseURL: baseURL, Origin: origin, Token: token, SessionID: sessionID, AcknowledgedRevision: acknowledged}, receive); err != nil {
+		network.Suspend(err)
+		client.recordConnectionFailure(machine, err)
+		return err
+	}
+	waitContext, cancelWait := context.WithCancel(ctx)
+	defer cancelWait()
+	transportEnded := make(chan error, 1)
+	go func() { transportEnded <- transport.Wait(waitContext) }()
+	select {
+	case synchronizedRevision := <-ready:
+		client.mutex.Lock()
+		if client.machine != machine || client.network != network || machine.State() == collabclient.StateClosed {
+			client.mutex.Unlock()
+			_ = transport.Close(websocket.StatusGoingAway, "session changed")
+			network.Suspend(context.Canceled)
+			return context.Canceled
+		}
+		client.transport = transport
+		client.lastErr = nil
+		client.mutex.Unlock()
+		client.recordSynchronized(machine, synchronizedRevision)
+		go client.monitorTransport(machine, transport, network)
+		return nil
+	case reconnectErr := <-errorsFound:
+		_ = transport.Close(websocket.StatusPolicyViolation, "reconnect failed")
+		network.Suspend(reconnectErr)
+		client.recordConnectionFailure(machine, reconnectErr)
+		return reconnectErr
+	case reconnectErr := <-transportEnded:
+		if reconnectErr == nil {
+			reconnectErr = collabclient.ErrTransportNotConnected
+		}
+		network.Suspend(reconnectErr)
+		client.recordConnectionFailure(machine, reconnectErr)
+		return reconnectErr
+	case <-ctx.Done():
+		_ = transport.Close(websocket.StatusGoingAway, "reconnect canceled")
+		network.Suspend(ctx.Err())
+		client.recordConnectionFailure(machine, ctx.Err())
+		return ctx.Err()
+	}
+}
+
+func (client *SessionClient) installReconnectSnapshot(ctx context.Context, network *collabclient.NetworkExecutor) error {
+	client.mutex.Lock()
+	invitation := Invitation{BaseURL: client.baseURL, Origin: client.origin, SessionID: client.sessionID, Token: client.resumptionToken}
+	client.mutex.Unlock()
+	snapshot, err := client.fetchSnapshot(ctx, invitation)
+	invitation.Token = ""
+	if err != nil {
+		return err
+	}
+	if err := network.ReplaceAcknowledgedSnapshot(ctx, snapshot); err != nil {
+		return err
+	}
+	client.mutex.Lock()
+	if client.network == network {
+		client.revision = snapshot.Revision
+	}
+	client.mutex.Unlock()
+	return nil
 }
 
 func cloneParticipantPresence(participant protocol.ParticipantPresence) protocol.ParticipantPresence {
 	if participant.Cursor != nil {
 		cursor := *participant.Cursor
 		participant.Cursor = &cursor
+	}
+	if participant.Selection != nil {
+		selection := *participant.Selection
+		participant.Selection = &selection
 	}
 	return participant
 }
@@ -394,6 +853,9 @@ func (client *SessionClient) fetchSnapshot(ctx context.Context, invitation Invit
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			return model.Snapshot{}, fmt.Errorf("%w: snapshot returned HTTP %d", collabclient.ErrAuthenticationDenied, response.StatusCode)
+		}
 		return model.Snapshot{}, fmt.Errorf("fetch collaboration snapshot returned HTTP %d", response.StatusCode)
 	}
 	var snapshot model.Snapshot

@@ -7,16 +7,20 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"sdmm/internal/aphelion/collab/model"
 )
 
 const (
-	MaxIdentifierBytes      = 128
-	MaxDisplayNameBytes     = 128
-	MaxMessageBytes         = 1 << 20
-	MaxOperationChanges     = 4096
-	MaxPresenceParticipants = 256
+	MaxIdentifierBytes        = 128
+	MaxDisplayNameBytes       = 128
+	MaxMessageBytes           = 1 << 20
+	MaxOperationChanges       = 4096
+	MaxPresenceParticipants   = 256
+	MaxPresenceSelectionTiles = 4096
+	MinPresenceIntervalMS     = 16
+	MaxPresenceIntervalMS     = 5000
 )
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -42,6 +46,8 @@ const (
 	ServerPresenceUpdate    ServerType = "presence_update"
 	ServerSessionNotice     ServerType = "session_notice"
 	ServerPong              ServerType = "pong"
+
+	NoticeSnapshotRequired = "snapshot_required"
 )
 
 type ClientEnvelope struct {
@@ -84,9 +90,15 @@ type InverseRequestPayload struct {
 }
 
 type PresenceUpdatePayload struct {
-	Sequence uint64       `json:"sequence"`
-	Cursor   *model.Coord `json:"cursor,omitempty"`
-	Status   string       `json:"status"`
+	Sequence  uint64             `json:"sequence"`
+	Cursor    *model.Coord       `json:"cursor,omitempty"`
+	Selection *PresenceSelection `json:"selection,omitempty"`
+	Status    string             `json:"status"`
+}
+
+type PresenceSelection struct {
+	Min model.Coord `json:"min"`
+	Max model.Coord `json:"max"`
 }
 
 type AcknowledgedRevisionPayload struct {
@@ -98,11 +110,14 @@ type PingPayload struct {
 }
 
 type JoinedPayload struct {
-	DocumentID model.DocumentID `json:"document_id"`
-	ActorID    model.ActorID    `json:"actor_id"`
-	Role       string           `json:"role"`
-	Revision   model.Revision   `json:"revision"`
-	MapHash    string           `json:"map_hash"`
+	DocumentID               model.DocumentID `json:"document_id"`
+	ActorID                  model.ActorID    `json:"actor_id"`
+	Role                     string           `json:"role"`
+	Revision                 model.Revision   `json:"revision"`
+	MapHash                  string           `json:"map_hash"`
+	PresenceIntervalMS       uint32           `json:"presence_interval_ms"`
+	ResumptionToken          string           `json:"resumption_token"`
+	ResumptionTokenExpiresAt time.Time        `json:"resumption_token_expires_at"`
 }
 
 type OperationAcceptedPayload struct {
@@ -125,11 +140,12 @@ type ReplayCompletePayload struct {
 }
 
 type ParticipantPresence struct {
-	ActorID     model.ActorID `json:"actor_id"`
-	DisplayName string        `json:"display_name"`
-	Sequence    uint64        `json:"sequence"`
-	Cursor      *model.Coord  `json:"cursor,omitempty"`
-	Status      string        `json:"status"`
+	ActorID     model.ActorID      `json:"actor_id"`
+	DisplayName string             `json:"display_name"`
+	Sequence    uint64             `json:"sequence"`
+	Cursor      *model.Coord       `json:"cursor,omitempty"`
+	Selection   *PresenceSelection `json:"selection,omitempty"`
+	Status      string             `json:"status"`
 }
 
 type PresenceSnapshotPayload struct {
@@ -258,6 +274,9 @@ func validateClientPayload(payload any) error {
 		if value.Cursor != nil && (value.Cursor.X < 1 || value.Cursor.Y < 1 || value.Cursor.Z < 1) {
 			return fmt.Errorf("cursor coordinates must be positive")
 		}
+		if err := validatePresenceSelection(value.Selection); err != nil {
+			return err
+		}
 		return validateIdentifier("status", value.Status)
 	case *AcknowledgedRevisionPayload:
 		return nil
@@ -279,6 +298,15 @@ func validateServerPayload(payload any) error {
 		}
 		if value.Role != "viewer" && value.Role != "editor" && value.Role != "owner" {
 			return fmt.Errorf("unsupported role %q", value.Role)
+		}
+		if value.PresenceIntervalMS < MinPresenceIntervalMS || value.PresenceIntervalMS > MaxPresenceIntervalMS {
+			return fmt.Errorf("presence interval is %dms, want %d..%dms", value.PresenceIntervalMS, MinPresenceIntervalMS, MaxPresenceIntervalMS)
+		}
+		if err := validateIdentifier("resumption token", value.ResumptionToken); err != nil {
+			return err
+		}
+		if value.ResumptionTokenExpiresAt.IsZero() {
+			return fmt.Errorf("resumption token expiry is required")
 		}
 		return validateHash("map hash", value.MapHash)
 	case *OperationAcceptedPayload:
@@ -403,7 +431,27 @@ func validatePresence(value *ParticipantPresence) error {
 	if value.Cursor != nil && (value.Cursor.X < 1 || value.Cursor.Y < 1 || value.Cursor.Z < 1) {
 		return fmt.Errorf("cursor coordinates must be positive")
 	}
+	if err := validatePresenceSelection(value.Selection); err != nil {
+		return err
+	}
 	return validateIdentifier("status", value.Status)
+}
+
+func validatePresenceSelection(selection *PresenceSelection) error {
+	if selection == nil {
+		return nil
+	}
+	if selection.Min.X < 1 || selection.Min.Y < 1 || selection.Min.Z < 1 || selection.Max.X < 1 || selection.Max.Y < 1 || selection.Max.Z < 1 {
+		return fmt.Errorf("selection coordinates must be positive")
+	}
+	if selection.Min.Z != selection.Max.Z || selection.Min.X > selection.Max.X || selection.Min.Y > selection.Max.Y {
+		return fmt.Errorf("selection bounds must be normalized on one level")
+	}
+	tileCount := int64(selection.Max.X-selection.Min.X+1) * int64(selection.Max.Y-selection.Min.Y+1)
+	if tileCount > MaxPresenceSelectionTiles {
+		return fmt.Errorf("selection has %d tiles, maximum is %d", tileCount, MaxPresenceSelectionTiles)
+	}
+	return nil
 }
 
 func validateIdentifier(name, value string) error {

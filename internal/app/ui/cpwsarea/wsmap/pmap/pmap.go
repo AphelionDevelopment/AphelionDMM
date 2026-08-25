@@ -1,6 +1,8 @@
 package pmap
 
 import (
+	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
 	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/prefs"
@@ -57,6 +59,7 @@ type App interface {
 	// APHELION EDIT ADDITION START - COLLABORATION
 	RunLater(func())
 	CollaborationPresence() []collabui.ObservedPresence
+	PublishCollaborationPresence(model.Coord, *protocol.PresenceSelection)
 	// APHELION EDIT ADDITION END
 }
 
@@ -286,6 +289,20 @@ func (p *PaneMap) showCanvas() {
 
 func (p *PaneMap) mouseChangeCallback(x, y uint) {
 	p.updateCanvasMousePosition(int(x), int(y))
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if !p.canvasState.HoverOutOfBounds() {
+		hovered := p.canvasState.HoveredTile()
+		var selection *protocol.PresenceSelection
+		if selected, ok := tools.Selected().(*tools.ToolGrab); ok && selected.HasSelectedArea() {
+			bounds := selected.Bounds()
+			selection = &protocol.PresenceSelection{
+				Min: model.Coord{X: int(bounds.X1), Y: int(bounds.Y1), Z: p.activeLevel},
+				Max: model.Coord{X: int(bounds.X2), Y: int(bounds.Y2), Z: p.activeLevel},
+			}
+		}
+		p.app.PublishCollaborationPresence(model.Coord{X: hovered.X, Y: hovered.Y, Z: hovered.Z}, selection)
+	}
+	// APHELION EDIT ADDITION END
 	tools.OnMouseMove()
 }
 

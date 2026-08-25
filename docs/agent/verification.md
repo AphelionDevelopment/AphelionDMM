@@ -15,9 +15,9 @@ Never present a lower level as a higher one. A successful focused test does not 
 
 ## Current authoritative versions
 
-- Go is selected by `go.mod` and currently declares Go 1.24.0.
+- Go is selected by `go.mod` and currently declares Go 1.25.13.
 - CI currently selects Rust 1.82 target-qualified toolchains.
-- CI currently selects golangci-lint 2.1.5.
+- CI currently selects golangci-lint 2.12.2.
 - The normal cross-stack build entry point is `task build` with an explicit `RUST_TARGET` matching CI.
 - Task is not pinned in the build job. Record `task --version` with evidence until protected infrastructure is explicitly approved for a reproducibility change.
 
@@ -72,4 +72,3 @@ Use fixed seeds for repeatable tests and record randomized seeds when a property
 ## Protected gates
 
 Changes to `.github/workflows/ci.yml`, `Taskfile.yml`, `Taskfile_windows.yml`, signing, updater publication, or release steps require exact-file review and explicit user confirmation. Plans may describe those changes; executors may not apply them without that confirmation.
-

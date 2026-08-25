@@ -2,6 +2,8 @@ package editor
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,9 @@ import (
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/executor"
 	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
+	"sdmm/internal/aphelion/collab/server"
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/canvas"
@@ -24,6 +29,7 @@ import (
 	"sdmm/internal/util"
 
 	"github.com/SpaiR/imgui-go"
+	"github.com/coder/websocket"
 )
 
 func TestEditorOperationUndoRedo(t *testing.T) {
@@ -214,6 +220,32 @@ func TestEditorNetworkCommitWaitsForAcknowledgementBeforeAddingUndo(t *testing.T
 	if !application.commands.HasUndoV("test") {
 		t.Fatal("acknowledged network operation did not enter undo history")
 	}
+
+	if !application.commands.UndoAsyncV("test", nil) {
+		t.Fatal("network undo did not start")
+	}
+	if application.commands.HasUndoV("test") || application.commands.HasRedoV("test") {
+		t.Fatal("network undo moved history before acknowledgement")
+	}
+	deferred.resolve(t)
+	application.runScheduled(t)
+	if !application.commands.HasRedoV("test") {
+		t.Fatal("acknowledged network undo did not enter redo history")
+	}
+	assertEditorDirection(t, mapState, "2")
+
+	if !application.commands.RedoAsyncV("test", nil) {
+		t.Fatal("network redo did not start")
+	}
+	if application.commands.HasUndoV("test") || application.commands.HasRedoV("test") {
+		t.Fatal("network redo moved history before acknowledgement")
+	}
+	deferred.resolve(t)
+	application.runScheduled(t)
+	if !application.commands.HasUndoV("test") {
+		t.Fatal("acknowledged network redo did not enter undo history")
+	}
+	assertEditorDirection(t, mapState, "4")
 }
 
 func TestEditorProcessesNetworkProjectionOnUIThread(t *testing.T) {
@@ -288,6 +320,182 @@ func TestEditorPendingNetworkEditUsesVisibleTileAsPrecondition(t *testing.T) {
 	}
 }
 
+func TestEditorRollsBackPendingEditAfterDisconnectAndAcceptsFreshEdit(t *testing.T) {
+	dmmap.PrefabStorage.Free()
+	t.Cleanup(dmmap.PrefabStorage.Free)
+
+	environment := editorTestEnvironment()
+	mapState := editorTestMap(environment)
+	application := &editorTestApp{
+		commands:    command.NewStorage(),
+		environment: environment,
+		paths:       dm.NewPathsFilterEmpty(),
+		runLater:    make(chan func(), 8),
+	}
+	application.commands.SetStack("test")
+	editor := New(application, &editorTestAttachedMap{snapshot: dmmsnap.New(mapState)}, mapState)
+	if editor.collaborationErr != nil {
+		t.Fatalf("initialize collaboration: %v", editor.collaborationErr)
+	}
+	firstTransport := newEditorNetworkTransport()
+	network, err := client.NewNetworkExecutor(firstTransport, editor.authoritative, editor.actorID, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	editor.executor = network
+
+	instance := mapState.Tiles[0].Instances()[2]
+	editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "4")))
+	editor.CommitOperation("Interrupted Network Change")
+	firstTransport.next(t)
+	if !network.HasUnacknowledgedOperations() {
+		t.Fatal("network edit was not awaiting acknowledgement")
+	}
+	lost := errors.New("forced disconnect")
+	network.Suspend(lost)
+	application.discardScheduled(t)
+	editor.ProcessCollaborationUpdates()
+	assertEditorDirection(t, mapState, "2")
+	if network.HasUnacknowledgedOperations() || application.commands.HasUndoV("test") {
+		t.Fatal("disconnected edit remained pending or entered undo history")
+	}
+
+	secondTransport := newEditorNetworkTransport()
+	if err := network.Resume(secondTransport); err != nil {
+		t.Fatal(err)
+	}
+	instance = mapState.Tiles[0].Instances()[2]
+	editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "8")))
+	editor.CommitOperation("Fresh Network Change")
+	submitted := secondTransport.next(t)
+	decoded, err := protocol.DecodeClient(mustEditorJSON(t, submitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := decoded.Payload.(*protocol.OperationSubmitPayload).Operation
+	document, err := engine.NewDocument(editor.authoritative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := document.Apply(operation, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapHash, err := document.Snapshot().Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	network.Receive(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "accepted", SessionID: "session-1", Type: protocol.ServerOperationAccepted, Payload: mustEditorJSON(t, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})})
+	application.runScheduled(t)
+	editor.ProcessCollaborationUpdates()
+	assertEditorDirection(t, mapState, "8")
+	if !application.commands.HasUndoV("test") {
+		t.Fatal("fresh acknowledged edit did not enter undo history after reconnect")
+	}
+}
+
+func TestEditorReconnectsToRealServiceAfterPendingEditAndUndoesFreshEdit(t *testing.T) {
+	dmmap.PrefabStorage.Free()
+	t.Cleanup(dmmap.PrefabStorage.Free)
+
+	environment := editorTestEnvironment()
+	mapState := editorTestMap(environment)
+	application := &editorTestApp{
+		commands:    command.NewStorage(),
+		environment: environment,
+		paths:       dm.NewPathsFilterEmpty(),
+		runLater:    make(chan func(), 8),
+	}
+	application.commands.SetStack("test")
+	editor := New(application, &editorTestAttachedMap{snapshot: dmmsnap.New(mapState)}, mapState)
+	if editor.collaborationErr != nil {
+		t.Fatalf("initialize collaboration: %v", editor.collaborationErr)
+	}
+	snapshot, err := editor.CollaborationSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := server.StartEmbedded(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = embedded.Shutdown(context.Background()) })
+
+	blocked := &blockingEditorSessionTransport{
+		SessionTransport: client.NewWebSocketTransport(client.TransportConfig{}),
+		intercepted:      make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	transportCount := 0
+	reconnectTransportCreated := make(chan struct{})
+	session := collabui.NewSessionClient(collabui.SessionClientConfig{NewTransport: func() collabui.SessionTransport {
+		transportCount++
+		if transportCount == 1 {
+			return blocked
+		}
+		if transportCount == 2 {
+			close(reconnectTransportCreated)
+		}
+		return client.NewWebSocketTransport(client.TransportConfig{})
+	}})
+	t.Cleanup(func() { _ = session.Leave(context.Background()) })
+	invitation, err := session.Create(context.Background(), embedded.Endpoint(), embedded.TakeLaunchToken(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Join(context.Background(), invitation); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.AttachCollaborationExecutor(session.NetworkExecutor()); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := mapState.Tiles[0].Instances()[2]
+	editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "4")))
+	editor.CommitOperation("Interrupted Real-Service Change")
+	select {
+	case <-blocked.intercepted:
+	case <-time.After(time.Second):
+		t.Fatal("editor operation did not reach the gated WebSocket transport")
+	}
+	if err := blocked.Close(websocket.StatusInternalError, "forced disconnect with editor operation in flight"); err != nil {
+		t.Fatal(err)
+	}
+	close(blocked.release)
+	application.discardScheduled(t)
+	select {
+	case <-reconnectTransportCreated:
+	case <-time.After(time.Second):
+		t.Fatal("session did not create a reconnect transport")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && session.Status().State != client.StateCaughtUp {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if status := session.Status(); status.State != client.StateCaughtUp {
+		t.Fatalf("session did not reconnect: %#v", status)
+	}
+	editor.ProcessCollaborationUpdates()
+	assertEditorDirection(t, mapState, "2")
+	if application.commands.HasUndoV("test") {
+		t.Fatal("interrupted editor operation entered undo history")
+	}
+
+	instance = mapState.Tiles[0].Instances()[2]
+	editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "8")))
+	editor.CommitOperation("Fresh Real-Service Change")
+	application.runScheduled(t)
+	editor.ProcessCollaborationUpdates()
+	assertEditorDirection(t, mapState, "8")
+	if !application.commands.UndoAsyncV("test", nil) {
+		t.Fatal("fresh acknowledged edit did not enter undo history")
+	}
+	application.runScheduled(t)
+	editor.ProcessCollaborationUpdates()
+	assertEditorDirection(t, mapState, "2")
+}
+
 func TestEditorAttachesRemoteExecutorAndAppliesSnapshot(t *testing.T) {
 	dmmap.PrefabStorage.Free()
 	t.Cleanup(dmmap.PrefabStorage.Free)
@@ -360,6 +568,81 @@ func (app *editorTestApp) runScheduled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no UI-thread job was scheduled")
 	}
+}
+
+func (app *editorTestApp) discardScheduled(t *testing.T) {
+	t.Helper()
+	select {
+	case <-app.runLater:
+	case <-time.After(time.Second):
+		t.Fatal("no UI-thread job was scheduled")
+	}
+}
+
+type editorNetworkTransport struct {
+	sent chan protocol.ClientEnvelope
+}
+
+type blockingEditorSessionTransport struct {
+	collabui.SessionTransport
+	intercepted chan struct{}
+	release     chan struct{}
+	once        sync.Once
+}
+
+func (transport *blockingEditorSessionTransport) Send(ctx context.Context, envelope protocol.ClientEnvelope) error {
+	if envelope.Type != protocol.ClientOperationSubmit {
+		return transport.SessionTransport.Send(ctx, envelope)
+	}
+	blocked := false
+	transport.once.Do(func() {
+		blocked = true
+		close(transport.intercepted)
+	})
+	if !blocked {
+		return transport.SessionTransport.Send(ctx, envelope)
+	}
+	select {
+	case <-transport.release:
+		return errors.New("forced disconnect before editor operation send")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func newEditorNetworkTransport() *editorNetworkTransport {
+	return &editorNetworkTransport{sent: make(chan protocol.ClientEnvelope, 4)}
+}
+
+func (*editorNetworkTransport) Connect(context.Context, protocol.JoinRequest, func(protocol.ServerEnvelope)) error {
+	return nil
+}
+
+func (transport *editorNetworkTransport) Send(_ context.Context, envelope protocol.ClientEnvelope) error {
+	transport.sent <- envelope
+	return nil
+}
+
+func (*editorNetworkTransport) Close(websocket.StatusCode, string) error { return nil }
+
+func (transport *editorNetworkTransport) next(t *testing.T) protocol.ClientEnvelope {
+	t.Helper()
+	select {
+	case envelope := <-transport.sent:
+		return envelope
+	case <-time.After(time.Second):
+		t.Fatal("network transport received no message")
+		return protocol.ClientEnvelope{}
+	}
+}
+
+func mustEditorJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 type deferredAsyncExecutor struct {

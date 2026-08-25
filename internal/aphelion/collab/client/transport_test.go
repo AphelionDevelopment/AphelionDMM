@@ -18,15 +18,14 @@ import (
 	"sdmm/internal/aphelion/collab/server"
 )
 
-func TestWebSocketTransportConnectSendAndCancel(t *testing.T) {
+func TestWebSocketTransportConnectSendAndClose(t *testing.T) {
 	t.Parallel()
 
 	baseURL, sessionID, token, _, shutdown := startClientTestService(t)
 	defer shutdown()
 	transport := NewWebSocketTransport(TransportConfig{})
 	received := make(chan protocol.ServerEnvelope, 16)
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := transport.Connect(ctx, protocol.JoinRequest{BaseURL: baseURL, Origin: "http://127.0.0.1", Token: token, SessionID: sessionID}, func(message protocol.ServerEnvelope) {
+	if err := transport.Connect(context.Background(), protocol.JoinRequest{BaseURL: baseURL, Origin: "http://127.0.0.1", Token: token, SessionID: sessionID}, func(message protocol.ServerEnvelope) {
 		received <- message
 	}); err != nil {
 		t.Fatal(err)
@@ -44,11 +43,13 @@ func TestWebSocketTransportConnectSendAndCancel(t *testing.T) {
 	if message := waitForServerType(t, received, protocol.ServerPong); message.Type != protocol.ServerPong {
 		t.Fatal("transport did not receive pong")
 	}
-	cancel()
+	if err := transport.Close(websocket.StatusNormalClosure, "test complete"); err != nil {
+		t.Fatal(err)
+	}
 	waitContext, cancelWait := context.WithTimeout(context.Background(), time.Second)
 	defer cancelWait()
-	if err := transport.Wait(waitContext); err == nil {
-		t.Fatal("Wait() error = nil after context cancellation")
+	if err := transport.Wait(waitContext); err != nil && websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+		t.Fatalf("Wait() error = %v after explicit close", err)
 	}
 }
 
@@ -125,6 +126,32 @@ func TestWebSocketTransportConnectHonorsDialDeadline(t *testing.T) {
 	case <-requestStarted:
 	default:
 		t.Fatal("dial deadline expired before reaching the test server")
+	}
+}
+
+func TestWebSocketTransportClassifiesPermanentReconnectFailures(t *testing.T) {
+	t.Parallel()
+
+	for name, testCase := range map[string]struct {
+		status int
+		want   error
+	}{
+		"authentication": {status: http.StatusUnauthorized, want: ErrAuthenticationDenied},
+		"protocol":       {status: http.StatusUpgradeRequired, want: ErrIncompatibleProtocol},
+	} {
+		name, testCase := name, testCase
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(testCase.status)
+			}))
+			defer testServer.Close()
+			transport := NewWebSocketTransport(TransportConfig{})
+			err := transport.Connect(context.Background(), protocol.JoinRequest{BaseURL: testServer.URL, Origin: "http://127.0.0.1", Token: "token", SessionID: "session"}, func(protocol.ServerEnvelope) {})
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("Connect() error = %v, want %v", err, testCase.want)
+			}
+		})
 	}
 }
 

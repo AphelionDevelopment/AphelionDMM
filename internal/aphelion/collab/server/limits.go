@@ -1,0 +1,83 @@
+package server
+
+import (
+	"time"
+
+	"sdmm/internal/aphelion/collab/protocol"
+)
+
+const (
+	defaultMaxConnections     = 256
+	defaultRateEntries        = 4096
+	defaultDurableQueueDepth  = 64
+	defaultPresenceQueueDepth = 1
+)
+
+type RateLimit struct {
+	Burst  int
+	Window time.Duration
+}
+
+type Limits struct {
+	MaxConnections           int
+	MaxOperationChanges      int
+	MaxWebSocketMessageBytes int64
+	MaxHTTPBodyBytes         int64
+	DurableQueueDepth        int
+	PresenceQueueDepth       int
+	RateEntries              int
+	JoinRate                 RateLimit
+	DurableRate              RateLimit
+	PresenceRate             RateLimit
+}
+
+func DefaultLimits() Limits {
+	return Limits{
+		MaxConnections:           defaultMaxConnections,
+		MaxOperationChanges:      protocol.MaxOperationChanges,
+		MaxWebSocketMessageBytes: protocol.MaxMessageBytes,
+		MaxHTTPBodyBytes:         MaxHTTPBodyBytes,
+		DurableQueueDepth:        defaultDurableQueueDepth,
+		PresenceQueueDepth:       defaultPresenceQueueDepth,
+		RateEntries:              defaultRateEntries,
+		JoinRate:                 RateLimit{Burst: 30, Window: time.Minute},
+		DurableRate:              RateLimit{Burst: 120, Window: time.Second},
+		PresenceRate:             RateLimit{Burst: 120, Window: time.Second},
+	}
+}
+
+func (limits Limits) withDefaults() Limits {
+	defaults := DefaultLimits()
+	if limits.MaxConnections <= 0 {
+		limits.MaxConnections = defaults.MaxConnections
+	}
+	if limits.MaxOperationChanges <= 0 || limits.MaxOperationChanges > protocol.MaxOperationChanges {
+		limits.MaxOperationChanges = defaults.MaxOperationChanges
+	}
+	if limits.MaxWebSocketMessageBytes <= 0 || limits.MaxWebSocketMessageBytes > protocol.MaxMessageBytes {
+		limits.MaxWebSocketMessageBytes = defaults.MaxWebSocketMessageBytes
+	}
+	if limits.MaxHTTPBodyBytes <= 0 || limits.MaxHTTPBodyBytes > MaxHTTPBodyBytes {
+		limits.MaxHTTPBodyBytes = defaults.MaxHTTPBodyBytes
+	}
+	if limits.DurableQueueDepth <= 0 {
+		limits.DurableQueueDepth = defaults.DurableQueueDepth
+	}
+	if limits.PresenceQueueDepth <= 0 {
+		limits.PresenceQueueDepth = defaults.PresenceQueueDepth
+	}
+	if limits.RateEntries <= 0 {
+		limits.RateEntries = defaults.RateEntries
+	}
+	limits.JoinRate = limits.JoinRate.withDefault(defaults.JoinRate)
+	limits.DurableRate = limits.DurableRate.withDefault(defaults.DurableRate)
+	limits.PresenceRate = limits.PresenceRate.withDefault(defaults.PresenceRate)
+	return limits
+}
+
+func (limit RateLimit) withDefault(fallback RateLimit) RateLimit {
+	if limit.Burst <= 0 || limit.Window <= 0 {
+		return fallback
+	}
+	return limit
+}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"sdmm/internal/aphelion/collab/model"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -96,6 +98,112 @@ func TestDecodeClientRejectsInvalidOperation(t *testing.T) {
 	if _, err := DecodeClient(data); err == nil {
 		t.Fatal("DecodeClient() error = nil")
 	}
+}
+
+func FuzzDecodeClient(f *testing.F) {
+	for _, seed := range [][]byte{
+		{},
+		[]byte(`{}`),
+		[]byte(`{"protocol_version":1,"message_id":"m","session_id":"s","type":"ping","payload":{"nonce":"n"}}`),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		_, _ = DecodeClient(data)
+	})
+}
+
+func FuzzDecodeServer(f *testing.F) {
+	for _, seed := range [][]byte{
+		{},
+		[]byte(`{}`),
+		[]byte(`{"protocol_version":1,"message_id":"m","session_id":"s","type":"pong","payload":{"nonce":"n"}}`),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		_, _ = DecodeServer(data)
+	})
+}
+
+func TestDecodeServerRejectsMissingPresenceInterval(t *testing.T) {
+	t.Parallel()
+
+	data := readFixture(t, "server_joined.json")
+	var envelope map[string]any
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	delete(envelope["payload"].(map[string]any), "presence_interval_ms")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeServer(data); err == nil {
+		t.Fatal("DecodeServer() accepted a joined message without a presence interval")
+	}
+}
+
+func TestDecodeServerRejectsMissingResumptionCredential(t *testing.T) {
+	t.Parallel()
+
+	data := readFixture(t, "server_joined.json")
+	var envelope map[string]any
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	payload := envelope["payload"].(map[string]any)
+	delete(payload, "resumption_token")
+	delete(payload, "resumption_token_expires_at")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeServer(data); err == nil {
+		t.Fatal("DecodeServer() accepted a joined message without a resumption credential")
+	}
+}
+
+func TestPresenceSelectionIsBoundedAndNormalized(t *testing.T) {
+	t.Parallel()
+
+	selection := &PresenceSelection{Min: model.Coord{X: 2, Y: 3, Z: 1}, Max: model.Coord{X: 4, Y: 5, Z: 1}}
+	payload := PresenceUpdatePayload{Sequence: 1, Cursor: &model.Coord{X: 2, Y: 3, Z: 1}, Selection: selection, Status: "active"}
+	encoded, err := json.Marshal(ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "presence", SessionID: "session", Type: ClientPresenceUpdate, Payload: mustMarshalPayload(t, payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeClient(encoded); err != nil {
+		t.Fatalf("DecodeClient() rejected normalized selection: %v", err)
+	}
+
+	selection.Min.X, selection.Max.X = 65, 1
+	encoded, err = json.Marshal(ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "presence", SessionID: "session", Type: ClientPresenceUpdate, Payload: mustMarshalPayload(t, payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeClient(encoded); err == nil {
+		t.Fatal("DecodeClient() accepted reversed selection bounds")
+	}
+
+	selection.Min = model.Coord{X: 1, Y: 1, Z: 1}
+	selection.Max = model.Coord{X: 65, Y: 65, Z: 1}
+	encoded, err = json.Marshal(ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "presence", SessionID: "session", Type: ClientPresenceUpdate, Payload: mustMarshalPayload(t, payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeClient(encoded); err == nil {
+		t.Fatal("DecodeClient() accepted a selection larger than 4096 tiles")
+	}
+}
+
+func mustMarshalPayload(t *testing.T, payload any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestContractsDeclareEveryFixtureMessage(t *testing.T) {

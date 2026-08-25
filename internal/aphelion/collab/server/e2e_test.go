@@ -33,7 +33,7 @@ func TestTwoClientsConverge(t *testing.T) {
 
 	clientA := connectTestClient(t, testServer.URL, created.SessionID, created.OwnerToken, 0)
 	defer func() { _ = clientA.CloseNow() }()
-	clientB := connectTestClient(t, testServer.URL, created.SessionID, editorToken, 0)
+	clientB, editorResumptionToken := connectTestClientWithCredential(t, testServer.URL, created.SessionID, editorToken, 0)
 
 	documentA, err := engine.NewDocument(snapshot)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestTwoClientsConverge(t *testing.T) {
 	acceptedThreeA := readAccepted(t, clientA)
 	applyAccepted(t, documentA, acceptedThreeA)
 
-	clientB = connectTestClient(t, testServer.URL, created.SessionID, editorToken, acceptedTwoB.Revision)
+	clientB, _ = connectTestClientWithCredential(t, testServer.URL, created.SessionID, editorResumptionToken, acceptedTwoB.Revision)
 	defer func() { _ = clientB.CloseNow() }()
 	replayedThree := readAccepted(t, clientB)
 	if replayedThree.OperationID != acceptedThreeA.OperationID || replayedThree.Revision != acceptedThreeA.Revision {
@@ -167,22 +167,7 @@ func createTestJoinToken(t *testing.T, baseURL, sessionID, ownerToken string, ro
 
 func connectTestClient(t *testing.T, baseURL, sessionID, token string, acknowledged model.Revision) *websocket.Conn {
 	t.Helper()
-	websocketURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/v1/collaboration"
-	connection, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
-		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + token}, "Origin": []string{"http://127.0.0.1"}},
-		Subprotocols: []string{WebSocketSubprotocol},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeClientEnvelope(t, connection, protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "join", SessionID: sessionID, Type: protocol.ClientJoin}, protocol.JoinPayload{JoinToken: token, AcknowledgedRevision: acknowledged})
-	if joined := readServerEnvelope(t, connection); joined.Envelope.Type != protocol.ServerJoined {
-		t.Fatalf("first message = %q, want joined", joined.Envelope.Type)
-	}
-	if acknowledged == 0 {
-		_ = readServerEnvelopeType(t, connection, protocol.ServerReplayComplete)
-		_ = readServerEnvelopeType(t, connection, protocol.ServerPresenceSnapshot)
-	}
+	connection, _ := connectTestClientWithCredential(t, baseURL, sessionID, token, acknowledged)
 	return connection
 }
 

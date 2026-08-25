@@ -178,6 +178,31 @@ func (e *Editor) ProcessCollaborationUpdates() {
 	}
 }
 
+// RefreshCollaborationSnapshot applies the executor's authoritative snapshot on the UI thread.
+func (e *Editor) RefreshCollaborationSnapshot(ctx context.Context) error {
+	if len(e.pendingChanges) != 0 {
+		return fmt.Errorf("refresh collaboration snapshot: map has an uncommitted edit")
+	}
+	if e.executor == nil {
+		return fmt.Errorf("refresh collaboration snapshot: executor is unavailable")
+	}
+	snapshot, err := e.executor.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("refresh collaboration snapshot: %w", err)
+	}
+	if err := mapadapter.ApplyWithEnvironment(e.dmm, snapshot, e.app.LoadedEnvironment()); err != nil {
+		return fmt.Errorf("refresh collaboration snapshot: %w", err)
+	}
+	e.setAuthoritative(snapshot)
+	e.refreshCollaborationView(e.pMap.ActiveLevel(), nil, snapshot)
+	return nil
+}
+
+func (e *Editor) CanChangeMapSize() bool {
+	_, asynchronous := e.executor.(executor.AsyncExecutor)
+	return !asynchronous
+}
+
 func (e *Editor) BeginTileChange(point util.Point) {
 	if e.collaborationErr != nil || e.executor == nil {
 		return
@@ -275,36 +300,62 @@ func (e *Editor) submitOperation(execution executor.Executor, operation model.Op
 
 func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage string, accepted model.AcceptedOperation, acceptedChanges []model.TileChange, activeLevel int, coords []model.Coord) {
 	forwardID := accepted.OperationID
-	e.app.CommandStorage().Push(command.Make(commitMessage, func() {
+	e.app.CommandStorage().Push(command.MakeAsync(commitMessage, func(complete func(error)) {
 		inverse, inverseErr := execution.BuildInverse(context.Background(), forwardID)
 		if inverseErr != nil {
 			e.reportCollaborationError("Unable to undo map change", inverseErr)
+			complete(inverseErr)
 			return
 		}
-		if _, inverseErr = execution.Execute(context.Background(), inverse); inverseErr != nil {
-			e.reportCollaborationError("Unable to undo map change", inverseErr)
-			return
-		}
-		e.syncFromExecutor(execution, true, activeLevel, coords)
-	}, func() {
+		e.executeHistoryOperation(execution, inverse, func(_ model.AcceptedOperation, executeErr error) {
+			if executeErr != nil {
+				e.reportCollaborationError("Unable to undo map change", executeErr)
+				complete(executeErr)
+				return
+			}
+			e.syncFromExecutor(execution, true, activeLevel, coords)
+			complete(nil)
+		})
+	}, func(complete func(error)) {
 		current, redoErr := execution.Snapshot(context.Background())
 		if redoErr != nil {
 			e.reportCollaborationError("Unable to redo map change", redoErr)
+			complete(redoErr)
 			return
 		}
 		redo, redoErr := e.forwardOperation(current, acceptedChanges)
 		if redoErr != nil {
 			e.reportCollaborationError("Unable to redo map change", redoErr)
+			complete(redoErr)
 			return
 		}
-		redone, redoErr := execution.Execute(context.Background(), redo)
-		if redoErr != nil {
-			e.reportCollaborationError("Unable to redo map change", redoErr)
-			return
-		}
-		forwardID = redone.OperationID
-		e.syncFromExecutor(execution, true, activeLevel, coords)
+		e.executeHistoryOperation(execution, redo, func(redone model.AcceptedOperation, executeErr error) {
+			if executeErr != nil {
+				e.reportCollaborationError("Unable to redo map change", executeErr)
+				complete(executeErr)
+				return
+			}
+			forwardID = redone.OperationID
+			e.syncFromExecutor(execution, true, activeLevel, coords)
+			complete(nil)
+		})
 	}))
+}
+
+func (e *Editor) executeHistoryOperation(execution executor.Executor, operation model.Operation, complete func(model.AcceptedOperation, error)) {
+	if asynchronous, ok := execution.(executor.AsyncExecutor); ok {
+		err := asynchronous.ExecuteAsync(context.Background(), operation, func(result model.AcceptedOperation, executeErr error) {
+			e.app.RunLater(func() {
+				complete(result, executeErr)
+			})
+		})
+		if err != nil {
+			complete(model.AcceptedOperation{}, err)
+		}
+		return
+	}
+	result, err := execution.Execute(context.Background(), operation)
+	complete(result, err)
 }
 
 func (e *Editor) forwardOperation(snapshot model.Snapshot, changes []model.TileChange) (model.Operation, error) {

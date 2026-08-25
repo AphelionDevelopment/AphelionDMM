@@ -43,7 +43,7 @@ func StartEmbeddedWithConfig(ctx context.Context, snapshot model.Snapshot, confi
 		return nil, fmt.Errorf("listen for embedded collaboration: %w", err)
 	}
 	baseURL := "http://" + listener.Addr().String()
-	service := NewService(ServiceConfig{AllowedOrigins: []string{baseURL, "http://127.0.0.1"}})
+	service := NewService(ServiceConfig{Store: config.Store, Document: config.Document, AllowedOrigins: []string{baseURL, "http://127.0.0.1"}})
 	launchToken, err := service.NewLaunchTokenForSnapshot(snapshot)
 	if err != nil {
 		_ = listener.Close()

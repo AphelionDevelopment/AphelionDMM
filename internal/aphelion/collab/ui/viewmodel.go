@@ -39,10 +39,12 @@ type ViewModel struct {
 	SyncLabel           string
 	Participants        []ParticipantView
 	ConflictSummaries   []string
+	Conflicts           []ConflictView
 	HiddenConflictCount int
 	CanEdit             bool
 	CanAdminister       bool
 	CanCopyInvite       bool
+	ShowReconnect       bool
 	CanReconnect        bool
 	CanLeave            bool
 	ErrorText           string
@@ -73,9 +75,23 @@ func BuildViewModel(status SessionStatus) ViewModel {
 		visibleConflicts = maxVisibleConflicts
 	}
 	conflicts := make([]string, visibleConflicts)
+	actionableConflicts := make([]ConflictView, visibleConflicts)
 	for index := 0; index < visibleConflicts; index++ {
 		conflict := status.Conflicts[index]
 		conflicts[index] = redactSensitive(fmt.Sprintf("%s: %s", conflict.Code, conflict.Message), status.SensitiveValues)
+		actionableConflicts[index] = BuildConflictView(conflict)
+		actionableConflicts[index].Code = redactSensitive(actionableConflicts[index].Code, status.SensitiveValues)
+		actionableConflicts[index].Message = redactSensitive(actionableConflicts[index].Message, status.SensitiveValues)
+		for tileIndex := range actionableConflicts[index].Values {
+			for prefabIndex := range actionableConflicts[index].Values[tileIndex].Prefabs {
+				prefab := &actionableConflicts[index].Values[tileIndex].Prefabs[prefabIndex]
+				prefab.Path = redactSensitive(prefab.Path, status.SensitiveValues)
+				for variableIndex := range prefab.Variables {
+					prefab.Variables[variableIndex].Name = redactSensitive(prefab.Variables[variableIndex].Name, status.SensitiveValues)
+					prefab.Variables[variableIndex].Value = redactSensitive(prefab.Variables[variableIndex].Value, status.SensitiveValues)
+				}
+			}
+		}
 	}
 	role := strings.ToLower(status.Role)
 	active := status.State != client.StateDisconnected && status.State != client.StateClosed
@@ -86,10 +102,12 @@ func BuildViewModel(status SessionStatus) ViewModel {
 		SyncLabel:           stateLabel(status.State),
 		Participants:        participants,
 		ConflictSummaries:   conflicts,
+		Conflicts:           actionableConflicts,
 		HiddenConflictCount: len(status.Conflicts) - visibleConflicts,
 		CanEdit:             role == "owner" || role == "editor",
 		CanAdminister:       role == "owner",
 		CanCopyInvite:       role == "owner" && status.InviteReady,
+		ShowReconnect:       status.State == client.StateReconnecting,
 		CanReconnect:        status.ReconnectReady && (status.State == client.StateDisconnected || status.State == client.StateReconnecting),
 		CanLeave:            active,
 	}

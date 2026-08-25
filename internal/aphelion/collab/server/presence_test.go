@@ -3,6 +3,9 @@ package server
 import (
 	"testing"
 	"time"
+
+	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
 )
 
 func TestPresenceCoalescesAndExpires(t *testing.T) {
@@ -20,12 +23,16 @@ func TestPresenceCoalescesAndExpires(t *testing.T) {
 	if err := manager.updateAt(principal, PresenceUpdate{Sequence: 1, Status: "active"}, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.updateAt(principal, PresenceUpdate{Sequence: 2, Status: "active"}, base.Add(time.Second)); err != nil {
+	selection := &protocol.PresenceSelection{Min: model.Coord{X: 1, Y: 2, Z: 1}, Max: model.Coord{X: 3, Y: 4, Z: 1}}
+	if err := manager.updateAt(principal, PresenceUpdate{Sequence: 2, Selection: selection, Status: "active"}, base.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	latest := <-updates
 	if latest.Sequence != 2 {
 		t.Fatalf("coalesced sequence = %d, want 2", latest.Sequence)
+	}
+	if latest.Selection == nil || latest.Selection.Min != selection.Min || latest.Selection.Max != selection.Max {
+		t.Fatalf("coalesced selection = %#v, want %#v", latest.Selection, selection)
 	}
 	if removed := manager.Expire(base.Add(31 * time.Second)); removed != 1 {
 		t.Fatalf("Expire() removed %d presences, want 1", removed)

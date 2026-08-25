@@ -17,6 +17,7 @@ type App interface {
 
 type editor interface {
 	ActiveLevel() int
+	CanChangeMapSize() bool
 
 	Dmm() *dmmap.Dmm
 	CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ int)

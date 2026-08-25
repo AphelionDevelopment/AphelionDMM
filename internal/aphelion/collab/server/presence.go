@@ -1,17 +1,21 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
 	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocol"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 type PresenceUpdate struct {
-	Sequence uint64
-	Cursor   *model.Coord
-	Status   string
+	Sequence  uint64
+	Cursor    *model.Coord
+	Selection *protocol.PresenceSelection
+	Status    string
 }
 
 type Presence struct {
@@ -19,6 +23,7 @@ type Presence struct {
 	DisplayName string
 	Sequence    uint64
 	Cursor      *model.Coord
+	Selection   *protocol.PresenceSelection
 	Status      string
 	UpdatedAt   time.Time
 }
@@ -29,9 +34,14 @@ type PresenceManager struct {
 	current     map[model.ActorID]Presence
 	subscribers map[uint64]chan Presence
 	nextID      uint64
+	telemetry   *collabtelemetry.Telemetry
 }
 
 func NewPresenceManager(timeout time.Duration) *PresenceManager {
+	return NewPresenceManagerWithTelemetry(timeout, nil)
+}
+
+func NewPresenceManagerWithTelemetry(timeout time.Duration, observability *collabtelemetry.Telemetry) *PresenceManager {
 	if timeout <= 0 {
 		timeout = time.Minute
 	}
@@ -39,6 +49,7 @@ func NewPresenceManager(timeout time.Duration) *PresenceManager {
 		timeout:     timeout,
 		current:     make(map[model.ActorID]Presence),
 		subscribers: make(map[uint64]chan Presence),
+		telemetry:   observability,
 	}
 }
 
@@ -56,6 +67,9 @@ func (manager *PresenceManager) updateAt(principal Principal, update PresenceUpd
 	if update.Cursor != nil && (update.Cursor.X < 1 || update.Cursor.Y < 1 || update.Cursor.Z < 1) {
 		return fmt.Errorf("presence cursor coordinates must be positive")
 	}
+	if err := validatePresenceSelection(update.Selection); err != nil {
+		return err
+	}
 
 	manager.mutex.Lock()
 	defer manager.mutex.Unlock()
@@ -67,6 +81,7 @@ func (manager *PresenceManager) updateAt(principal Principal, update PresenceUpd
 		DisplayName: principal.DisplayName(),
 		Sequence:    update.Sequence,
 		Cursor:      cloneCoord(update.Cursor),
+		Selection:   cloneSelection(update.Selection),
 		Status:      update.Status,
 		UpdatedAt:   updatedAt,
 	}
@@ -107,6 +122,7 @@ func (manager *PresenceManager) Subscribe(buffer int) ([]Presence, <-chan Presen
 	snapshot := make([]Presence, 0, len(manager.current))
 	for _, presence := range manager.current {
 		presence.Cursor = cloneCoord(presence.Cursor)
+		presence.Selection = cloneSelection(presence.Selection)
 		snapshot = append(snapshot, presence)
 	}
 	var once sync.Once
@@ -127,9 +143,13 @@ func (manager *PresenceManager) publish(value Presence) {
 	for _, subscriber := range manager.subscribers {
 		copy := value
 		copy.Cursor = cloneCoord(value.Cursor)
+		copy.Selection = cloneSelection(value.Selection)
 		select {
 		case subscriber <- copy:
 		default:
+			if manager.telemetry != nil {
+				manager.telemetry.PresenceDropped(context.Background())
+			}
 			select {
 			case <-subscriber:
 			default:
@@ -148,4 +168,29 @@ func cloneCoord(coord *model.Coord) *model.Coord {
 	}
 	copy := *coord
 	return &copy
+}
+
+func cloneSelection(selection *protocol.PresenceSelection) *protocol.PresenceSelection {
+	if selection == nil {
+		return nil
+	}
+	copy := *selection
+	return &copy
+}
+
+func validatePresenceSelection(selection *protocol.PresenceSelection) error {
+	if selection == nil {
+		return nil
+	}
+	if selection.Min.X < 1 || selection.Min.Y < 1 || selection.Min.Z < 1 || selection.Max.X < 1 || selection.Max.Y < 1 || selection.Max.Z < 1 {
+		return fmt.Errorf("presence selection coordinates must be positive")
+	}
+	if selection.Min.Z != selection.Max.Z || selection.Min.X > selection.Max.X || selection.Min.Y > selection.Max.Y {
+		return fmt.Errorf("presence selection bounds must be normalized on one level")
+	}
+	tileCount := int64(selection.Max.X-selection.Min.X+1) * int64(selection.Max.Y-selection.Min.Y+1)
+	if tileCount > protocol.MaxPresenceSelectionTiles {
+		return fmt.Errorf("presence selection has %d tiles, maximum is %d", tileCount, protocol.MaxPresenceSelectionTiles)
+	}
+	return nil
 }

@@ -23,7 +23,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.1.5
+          version: v2.12.2
 
   build:
     strategy:
@@ -94,6 +94,40 @@ jobs:
           name: ${{ runner.os }}
           path: dst/*
           if-no-files-found: error
+
+  collaboration-resilience:
+    name: Collaboration Resilience
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        run: |
+          sudo apt clean
+          sudo apt update
+          sudo apt install xorg-dev libgtk-3-dev
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+
+      - name: Collaboration Race Gate
+        run: go test -race ./internal/aphelion/... -count=1
+
+      - name: SQLite Restart and Fault Gates
+        run: go test ./internal/aphelion/collab/store/sqlite -run 'Test(StoreSurvivesCloseAndReopen|AppendFailureRollsBackTransaction|CorruptCopiedDatabaseFailsWithoutChangingSource)$' -count=1
+
+      - name: Collaboration Fault Gates
+        run: go test ./internal/aphelion/collab/server -run 'Test(InterruptedSnapshotDoesNotLoseAcknowledgedOperation|RecoverDocumentRejectsDiscontinuousReplay|PresencePressureDoesNotBlockDurableDelivery)$' -count=1
+
+      - name: Protocol Fuzz Smoke
+        run: |
+          go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
+          go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeServer$' -fuzztime=5s
 
   release:
     name: Release

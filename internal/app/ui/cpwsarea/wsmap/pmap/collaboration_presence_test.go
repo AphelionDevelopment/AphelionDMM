@@ -18,3 +18,14 @@ func TestPresenceScreenBoundsApplyCameraAndInvertYAxis(t *testing.T) {
 		t.Fatalf("screen bounds = %v..%v, want (184,418)..(248,482)", min, max)
 	}
 }
+
+func TestPresenceSelectionScreenBoundsApplyCameraAndInvertYAxis(t *testing.T) {
+	t.Parallel()
+
+	selection := collabui.PresenceSelectionOverlay{PixelX1: 32, PixelY1: 64, PixelX2: 96, PixelY2: 128}
+	min, max := presenceSelectionScreenBounds(selection, 2, 10, -5, imgui.Vec2{X: 100, Y: 200}, imgui.Vec2{X: 500, Y: 600})
+
+	if min != (imgui.Vec2{X: 184, Y: 354}) || max != (imgui.Vec2{X: 312, Y: 482}) {
+		t.Fatalf("selection screen bounds = %v..%v, want (184,354)..(312,482)", min, max)
+	}
+}

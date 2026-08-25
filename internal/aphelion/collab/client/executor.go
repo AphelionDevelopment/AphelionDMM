@@ -35,6 +35,7 @@ type NetworkExecutor struct {
 	conflicts  []Conflict
 	updates    chan Projection
 	terminal   error
+	suspended  error
 }
 
 func NewNetworkExecutor(transport Transport, snapshot model.Snapshot, actor model.ActorID, sessionID string) (*NetworkExecutor, error) {
@@ -80,6 +81,11 @@ func (network *NetworkExecutor) Execute(ctx context.Context, operation model.Ope
 		network.mutex.Unlock()
 		return model.AcceptedOperation{}, err
 	}
+	if network.suspended != nil {
+		err := network.suspended
+		network.mutex.Unlock()
+		return model.AcceptedOperation{}, err
+	}
 	projection, err := network.projection.Submit(operation)
 	if err != nil {
 		network.mutex.Unlock()
@@ -88,6 +94,7 @@ func (network *NetworkExecutor) Execute(ctx context.Context, operation model.Ope
 	result := make(chan operationResult, 1)
 	network.projection = projection
 	network.pending[operation.OperationID] = result
+	transport := network.transport
 	network.publishLocked()
 	network.mutex.Unlock()
 
@@ -97,7 +104,7 @@ func (network *NetworkExecutor) Execute(ctx context.Context, operation model.Ope
 		return model.AcceptedOperation{}, err
 	}
 	envelope := protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: string(operation.OperationID), SessionID: network.sessionID, Type: protocol.ClientOperationSubmit, Payload: payload}
-	if err := network.transport.Send(ctx, envelope); err != nil {
+	if err := transport.Send(ctx, envelope); err != nil {
 		network.failPending(operation.OperationID, err)
 		return model.AcceptedOperation{}, err
 	}
@@ -188,6 +195,173 @@ func (network *NetworkExecutor) Conflicts() []Conflict {
 	return conflicts
 }
 
+// Suspend rolls back unacknowledged operations while retaining acknowledged state for reconnect.
+func (network *NetworkExecutor) Suspend(cause error) {
+	if cause == nil {
+		cause = ErrTransportNotConnected
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	if network.terminal != nil || network.suspended != nil {
+		return
+	}
+	network.suspended = cause
+	for operationID, waiter := range network.pending {
+		delete(network.pending, operationID)
+		waiter <- operationResult{err: cause}
+	}
+	network.projection.Pending = nil
+	network.publishLocked()
+}
+
+// Resume binds a fresh transport while preserving acknowledged state and accepted history.
+func (network *NetworkExecutor) Resume(transport Transport) error {
+	if transport == nil {
+		return fmt.Errorf("network executor transport is nil")
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	if network.terminal != nil {
+		return network.terminal
+	}
+	if network.suspended == nil {
+		return fmt.Errorf("network executor is not suspended")
+	}
+	network.transport = transport
+	network.suspended = nil
+	return nil
+}
+
+// ReplaceAcknowledgedSnapshot installs a newer authoritative baseline during reconnect fallback.
+func (network *NetworkExecutor) ReplaceAcknowledgedSnapshot(ctx context.Context, snapshot model.Snapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := snapshot.Hash(); err != nil {
+		return err
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	if network.terminal != nil {
+		return network.terminal
+	}
+	if len(network.pending) != 0 || len(network.projection.Pending) != 0 {
+		return fmt.Errorf("cannot replace acknowledged snapshot while operations are pending")
+	}
+	current := network.projection.Acknowledged
+	if snapshot.DocumentID != current.DocumentID || snapshot.EnvironmentHash != current.EnvironmentHash {
+		return fmt.Errorf("replacement snapshot is incompatible with acknowledged document")
+	}
+	if snapshot.Revision < current.Revision {
+		return fmt.Errorf("replacement snapshot revision %d precedes acknowledged revision %d", snapshot.Revision, current.Revision)
+	}
+	if snapshot.Revision == current.Revision {
+		currentHash, err := current.Hash()
+		if err != nil {
+			return err
+		}
+		replacementHash, err := snapshot.Hash()
+		if err != nil {
+			return err
+		}
+		if replacementHash != currentHash {
+			return fmt.Errorf("replacement snapshot conflicts with acknowledged revision %d", current.Revision)
+		}
+		return nil
+	}
+	network.projection = NewProjection(snapshot)
+	network.conflicts = nil
+	network.publishLocked()
+	return nil
+}
+
+func (network *NetworkExecutor) RefreshConflict(ctx context.Context, operationID model.OperationID) (model.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	if _, exists := network.conflictLocked(operationID); !exists {
+		return model.Snapshot{}, fmt.Errorf("conflict for operation %q is not retained", operationID)
+	}
+	return model.CloneSnapshot(network.projection.Acknowledged), nil
+}
+
+func (network *NetworkExecutor) DiscardConflict(ctx context.Context, operationID model.OperationID) (model.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	index, exists := network.conflictLocked(operationID)
+	if !exists {
+		return model.Snapshot{}, fmt.Errorf("conflict for operation %q is not retained", operationID)
+	}
+	network.conflicts = append(network.conflicts[:index], network.conflicts[index+1:]...)
+	return model.CloneSnapshot(network.projection.Acknowledged), nil
+}
+
+func (network *NetworkExecutor) BuildConflictRebuild(ctx context.Context, operationID model.OperationID) (model.Operation, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Operation{}, err
+	}
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	index, exists := network.conflictLocked(operationID)
+	if !exists {
+		return model.Operation{}, fmt.Errorf("conflict for operation %q is not retained", operationID)
+	}
+	if len(network.projection.Pending) != 0 {
+		return model.Operation{}, fmt.Errorf("cannot rebuild conflict while operations are pending")
+	}
+	conflict := network.conflicts[index]
+	newOperationID, err := model.NewOperationID()
+	if err != nil {
+		return model.Operation{}, err
+	}
+	baseHash, err := network.projection.Acknowledged.Hash()
+	if err != nil {
+		return model.Operation{}, err
+	}
+	changes := make([]model.TileChange, 0, len(conflict.Draft.Changes))
+	for _, draftChange := range conflict.Draft.Changes {
+		current := tileStateAt(network.projection.Acknowledged, draftChange.Coord)
+		if current.Equal(draftChange.After) {
+			continue
+		}
+		changes = append(changes, model.TileChange{
+			Coord:  draftChange.Coord,
+			Before: current,
+			After:  model.CloneTileState(draftChange.After),
+		})
+	}
+	if len(changes) == 0 {
+		return model.Operation{}, fmt.Errorf("rejected intent is already present in the authoritative document")
+	}
+	return model.Operation{
+		ProtocolVersion: model.ProtocolVersion,
+		DocumentID:      network.projection.Acknowledged.DocumentID,
+		ActorID:         network.actor,
+		OperationID:     newOperationID,
+		BaseRevision:    network.projection.Acknowledged.Revision,
+		EnvironmentHash: network.projection.Acknowledged.EnvironmentHash,
+		BaseMapHash:     baseHash,
+		Kind:            model.OperationKindTileChange,
+		Changes:         changes,
+	}, nil
+}
+
+func (network *NetworkExecutor) DismissConflict(operationID model.OperationID) bool {
+	network.mutex.Lock()
+	defer network.mutex.Unlock()
+	index, exists := network.conflictLocked(operationID)
+	if !exists {
+		return false
+	}
+	network.conflicts = append(network.conflicts[:index], network.conflicts[index+1:]...)
+	return true
+}
+
 // Terminate releases pending operations and prevents further executor use.
 func (network *NetworkExecutor) Terminate(cause error) {
 	if cause == nil {
@@ -245,8 +419,18 @@ func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) {
 }
 
 func cloneConflict(conflict Conflict) Conflict {
+	conflict.Draft = model.CloneOperation(conflict.Draft)
 	conflict.AuthoritativeValues = cloneTiles(conflict.AuthoritativeValues)
 	return conflict
+}
+
+func (network *NetworkExecutor) conflictLocked(operationID model.OperationID) (int, bool) {
+	for index, conflict := range network.conflicts {
+		if conflict.OperationID == operationID {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func (network *NetworkExecutor) failPending(operationID model.OperationID, cause error) {
