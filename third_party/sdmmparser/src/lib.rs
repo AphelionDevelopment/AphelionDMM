@@ -18,21 +18,34 @@ mod icon;
 
 #[no_mangle]
 #[allow(non_snake_case)]
-pub extern fn SdmmParseEnvironment(native_path: *const c_char) -> *const c_char {
+// APHELION EDIT CHANGE - TOOLCHAIN_BASELINE - ORIGINAL: pub extern fn SdmmParseEnvironment(native_path: *const c_char) -> *const c_char {
+pub extern "C" fn SdmmParseEnvironment(native_path: *const c_char) -> *const c_char {
     to_ptr(parse_environment(to_string(native_path)))
 }
 
 #[no_mangle]
 #[allow(non_snake_case)]
-pub extern fn SdmmParseIconMetadata(native_path: *const c_char) -> *const c_char {
+// APHELION EDIT CHANGE - TOOLCHAIN_BASELINE - ORIGINAL: pub extern fn SdmmParseIconMetadata(native_path: *const c_char) -> *const c_char {
+pub extern "C" fn SdmmParseIconMetadata(native_path: *const c_char) -> *const c_char {
     to_ptr(parse_icon_metadata(to_string(native_path)))
 }
 
 #[no_mangle]
 #[allow(non_snake_case)]
+/* APHELION EDIT REMOVAL START - TOOLCHAIN_BASELINE
 pub extern fn SdmmFreeStr(native_str: *mut c_char) {
     unsafe { let _ = CString::from_raw(native_str); };
 }
+APHELION EDIT REMOVAL END */
+// APHELION EDIT ADDITION START - TOOLCHAIN_BASELINE
+/// # Safety
+/// `native_str` must be a non-null pointer returned by this library's parsing functions.
+pub unsafe extern "C" fn SdmmFreeStr(native_str: *mut c_char) {
+    unsafe {
+        let _ = CString::from_raw(native_str);
+    };
+}
+// APHELION EDIT ADDITION END
 
 /// Convert a native string to a Rust string
 fn to_string(pointer: *const c_char) -> String {

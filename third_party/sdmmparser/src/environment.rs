@@ -90,7 +90,16 @@ fn errors_message(ctx: &Context) -> Option<String> {
 fn recurse_objtree(ctx: &Context, ty: TypeRef) -> ObjectTreeType {
     let mut entry = ObjectTreeType {
         location: Location {
+            /* APHELION EDIT REMOVAL START - TOOLCHAIN_BASELINE
             file: ctx.file_path(ty.location.file).to_str().unwrap_or("").to_owned(),
+            APHELION EDIT REMOVAL END */
+            // APHELION EDIT ADDITION START - TOOLCHAIN_BASELINE
+            file: ctx
+                .file_path(ty.location.file)
+                .to_str()
+                .unwrap_or("")
+                .to_owned(),
+            // APHELION EDIT ADDITION END
             line: ty.location.line,
             column: ty.location.column,
         },

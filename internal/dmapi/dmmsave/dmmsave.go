@@ -1,26 +1,28 @@
 package dmmsave
 
 import (
+	"fmt"
+
 	"sdmm/internal/dmapi/dmenv"
 
 	"sdmm/internal/dmapi/dmmap"
-	"sdmm/internal/util"
 
 	"github.com/rs/zerolog/log"
 )
 
-func Save(dme *dmenv.Dme, dmm *dmmap.Dmm, cfg Config) {
-	SaveV(dme, dmm, dmm.Path.Absolute, cfg)
+// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: func Save(dme *dmenv.Dme, dmm *dmmap.Dmm, cfg Config)
+func Save(dme *dmenv.Dme, dmm *dmmap.Dmm, cfg Config) error {
+	return SaveV(dme, dmm, dmm.Path.Absolute, cfg)
 }
 
-func SaveV(dme *dmenv.Dme, dmm *dmmap.Dmm, path string, cfg Config) {
+// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: func SaveV(dme *dmenv.Dme, dmm *dmmap.Dmm, path string, cfg Config)
+func SaveV(dme *dmenv.Dme, dmm *dmmap.Dmm, path string, cfg Config) error {
 	log.Printf("save started [%s]...", path)
 
 	sp, err := makeSaveProcess(cfg, dme, dmm, path)
 	if err != nil {
 		log.Print("unable to start save process")
-		util.ShowErrorDialog("Unable to start save process")
-		return
+		return fmt.Errorf("start save process: %w", err)
 	}
 
 	if cfg.SanitizeVariables {
@@ -30,10 +32,12 @@ func SaveV(dme *dmenv.Dme, dmm *dmmap.Dmm, path string, cfg Config) {
 	sp.handleReusedKeys()
 	if err = sp.handleLocationsWithoutKeys(); err != nil {
 		log.Print("unable to handle locations without keys:", err)
-		util.ShowErrorDialog("Unable to save the map: " + err.Error())
-		return
+		return fmt.Errorf("assign map keys: %w", err)
 	}
-	sp.output.Save()
+	if err := sp.output.Save(); err != nil {
+		return err
+	}
 
 	log.Print("save finished")
+	return nil
 }

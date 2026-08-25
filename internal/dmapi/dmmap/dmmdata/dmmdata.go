@@ -27,12 +27,12 @@ type DmmData struct {
 	Grid       DataGrid
 }
 
-func (d DmmData) Save() {
+// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: func (d DmmData) Save()
+func (d DmmData) Save() error {
 	if d.IsTgm {
-		d.SaveTGM(d.Filepath)
-	} else {
-		d.SaveDM(d.Filepath)
+		return d.SaveTGM(d.Filepath)
 	}
+	return d.SaveDM(d.Filepath)
 }
 
 func (d DmmData) Keys() []Key {
@@ -63,6 +63,7 @@ func New(path string) (*DmmData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: defer file.Close()
+	defer func() { _ = file.Close() }()
 	return parse(file)
 }

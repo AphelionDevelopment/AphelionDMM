@@ -109,7 +109,10 @@ func Render(drawData imgui.DrawData) {
 			} else if clipRectX < fbWidth && clipRectY < fbHeight && clipRectZ > 0 && clipRectW > 0 {
 				gl.Scissor(int32(clipRectX), int32(fbHeight-clipRectW), int32(clipRectZ-clipRectX), int32(clipRectW-clipRectY))
 				gl.BindTexture(gl.TEXTURE_2D, uint32(cmd.TextureID()))
+				// APHELION EDIT ADDITION START - STATIC_ANALYSIS
+				//nolint:govet // OpenGL interprets this pointer value as an element-buffer byte offset, not Go memory.
 				gl.DrawElements(gl.TRIANGLES, int32(cmd.ElementCount()), uint32(gl.UNSIGNED_SHORT), unsafe.Pointer(indexBufferOffset))
+				// APHELION EDIT ADDITION END
 			}
 
 			indexBufferOffset += uintptr(cmd.ElementCount() * indexSize)
@@ -285,9 +288,14 @@ func bind(displayPos, displaySize *imgui.Vec2, fbWidth, fbHeight int32) {
 	gl.EnableVertexAttribArray(uint32(gAttributeLocationVtxColor))
 
 	vertexSize, vertexOffsetPos, vertexOffsetUv, vertexOffsetCol := imgui.VertexBufferLayout()
+	// APHELION EDIT ADDITION START - STATIC_ANALYSIS
+	//nolint:govet // OpenGL interprets these pointer values as vertex-buffer byte offsets, not Go memory.
 	gl.VertexAttribPointer(uint32(gAttributeLocationVtxPos), 2, gl.FLOAT, false, int32(vertexSize), unsafe.Pointer(uintptr(vertexOffsetPos)))
+	//nolint:govet // OpenGL interprets these pointer values as vertex-buffer byte offsets, not Go memory.
 	gl.VertexAttribPointer(uint32(gAttributeLocationVtxUV), 2, gl.FLOAT, false, int32(vertexSize), unsafe.Pointer(uintptr(vertexOffsetUv)))
+	//nolint:govet // OpenGL interprets these pointer values as vertex-buffer byte offsets, not Go memory.
 	gl.VertexAttribPointer(uint32(gAttributeLocationVtxColor), 4, gl.UNSIGNED_BYTE, true, int32(vertexSize), unsafe.Pointer(uintptr(vertexOffsetCol)))
+	// APHELION EDIT ADDITION END
 }
 
 func unbind() {

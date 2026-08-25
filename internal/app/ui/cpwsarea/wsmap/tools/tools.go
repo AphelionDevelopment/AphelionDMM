@@ -43,7 +43,10 @@ type canvasState interface {
 type editor interface {
 	Dmm() *dmmap.Dmm
 
-	CommitChanges(commitMsg string)
+	CommitOperation(commitMsg string)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	BeginTileChange(util.Point)
+	// APHELION EDIT ADDITION END
 
 	UpdateCanvasByCoords([]util.Point)
 	UpdateCanvasByTiles([]dmmap.Tile)
@@ -55,6 +58,9 @@ type editor interface {
 
 	InstanceSelect(i *dmminstance.Instance)
 	InstanceDelete(i *dmminstance.Instance)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	InstanceReplace(i *dmminstance.Instance, prefab *dmmprefab.Prefab)
+	// APHELION EDIT ADDITION END
 
 	TileReplace(coord util.Point, prefabs dmmdata.Prefabs)
 

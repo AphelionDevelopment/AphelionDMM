@@ -30,6 +30,11 @@ type app interface {
 	DoSaveAll()
 	DoOpenPreferences()
 	DoExit()
+	// APHELION EDIT ADDITION START - COLLABORATION
+	DoCreateLocalCollaborationSession()
+	DoLeaveCollaborationSession()
+	DoOpenCollaborationPanel()
+	// APHELION EDIT ADDITION END
 
 	// Edit
 	DoUndo()
@@ -72,6 +77,9 @@ type app interface {
 	HasLoadedEnvironment() bool
 
 	HasActiveMap() bool
+	// APHELION EDIT ADDITION START - COLLABORATION
+	HasActiveCollaboration() bool
+	// APHELION EDIT ADDITION END
 
 	PathsFilter() *dm.PathsFilter
 	CommandStorage() *command.Storage
@@ -199,6 +207,19 @@ func (m *Menu) Process() {
 				Enabled(m.app.HasActiveMap()).
 				Shortcut(platform.KeyModName(), "G"),
 		}),
+
+		// APHELION EDIT ADDITION START - COLLABORATION
+		w.Menu("Collaboration", w.Layout{
+			w.MenuItem("Show Session Panel", m.app.DoOpenCollaborationPanel).
+				IconEmpty(),
+			w.MenuItem("Start Local Session", m.app.DoCreateLocalCollaborationSession).
+				IconEmpty().
+				Enabled(m.app.HasActiveMap() && !m.app.HasActiveCollaboration()),
+			w.MenuItem("Leave Session", m.app.DoLeaveCollaborationSession).
+				IconEmpty().
+				Enabled(m.app.HasActiveCollaboration()),
+		}),
+		// APHELION EDIT ADDITION END
 
 		w.Menu("View", w.Layout{
 			w.MenuItem("Show Area", m.doToggleArea).

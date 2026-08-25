@@ -23,7 +23,8 @@ func SaveV(filepath string, cfg any) {
 		log.Print("unable to create file by path:", filepath)
 		return
 	}
-	defer f.Close()
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if j, err := json.Marshal(cfg); err == nil {
 		_, _ = f.Write(j)
@@ -42,7 +43,8 @@ func LoadV(filepath string, cfg any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var j []byte
 	if j, err = os.ReadFile(filepath); err == nil {

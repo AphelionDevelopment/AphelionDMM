@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"strconv"
+	"time"
 
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/render"
 	"sdmm/internal/app/ui/cpwsarea/workspace"
@@ -24,6 +27,8 @@ import (
 	"github.com/skratchdot/open-golang/open"
 	"github.com/sqweek/dialog"
 )
+
+const collaborationActionTimeout = 15 * time.Second
 
 /*
 	File similar to action.go, but contains methods triggered by user. (ex. when button clicked)
@@ -130,13 +135,116 @@ func (a *app) DoRemoveRecentMap(mapPath string) {
 
 // DoClose closes currently active workspace.
 func (a *app) DoClose() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if a.collaborationEditor != nil && a.CurrentEditor() == a.collaborationEditor {
+		guard, err := a.collaborationProjectReplacementGuard()
+		if err != nil {
+			log.Error().Err(err).Msg("unable to prepare collaborative workspace close")
+			util.ShowErrorDialog("Unable to close workspace: " + err.Error())
+			return
+		}
+		a.layout.WsArea.CloseGuarded(guard, nil)
+		return
+	}
+	// APHELION EDIT ADDITION END
 	a.layout.WsArea.Close()
 }
 
 // DoCloseAll closes all opened workspaces.
 func (a *app) DoCloseAll() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if a.HasActiveCollaboration() {
+		guard, err := a.collaborationProjectReplacementGuard()
+		if err != nil {
+			log.Error().Err(err).Msg("unable to prepare collaborative workspace close")
+			util.ShowErrorDialog("Unable to close workspaces: " + err.Error())
+			return
+		}
+		a.layout.WsArea.CloseAllGuarded(guard, nil)
+		return
+	}
+	// APHELION EDIT ADDITION END
 	a.layout.WsArea.CloseAll()
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+
+func (a *app) DoCreateLocalCollaborationSession() {
+	selectedEditor := a.CurrentEditor()
+	if selectedEditor == nil {
+		util.ShowErrorDialog("Unable to start collaboration: no map is active")
+		return
+	}
+	snapshot, err := selectedEditor.CollaborationSnapshot(context.Background())
+	if err != nil {
+		util.ShowErrorDialog("Unable to start collaboration: " + err.Error())
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		execution, prepareErr := collabui.PrepareLocalSession(ctx, a.collaborationController, a.collaborationClient, snapshot)
+		window.RunLater(func() {
+			if prepareErr != nil {
+				log.Error().Err(prepareErr).Msg("Unable to start collaboration")
+				util.ShowErrorDialog("Unable to start collaboration: " + prepareErr.Error())
+				return
+			}
+			attachErr := collabui.AttachPreparedSession(execution, selectedEditor, a.CurrentEditor() == selectedEditor)
+			if attachErr == nil {
+				a.collaborationEditor = selectedEditor
+				return
+			}
+			log.Error().Err(attachErr).Msg("Unable to attach collaboration session")
+			util.ShowErrorDialog("Unable to attach collaboration session: " + attachErr.Error())
+			go a.leaveCollaborationAfterAttachmentFailure()
+		})
+	}()
+}
+
+func (a *app) DoLeaveCollaborationSession() {
+	if a.collaborationController == nil || !a.collaborationController.Active() {
+		return
+	}
+	if a.collaborationEditor != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		err := a.collaborationEditor.DetachCollaborationExecutor(ctx)
+		cancel()
+		if err != nil {
+			util.ShowErrorDialog("Unable to leave collaboration: " + err.Error())
+			return
+		}
+		a.collaborationEditor = nil
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		if err := a.collaborationController.Leave(ctx); err != nil {
+			log.Error().Err(err).Msg("Unable to leave collaboration")
+			window.RunLater(func() {
+				util.ShowErrorDialog("Unable to leave collaboration: " + err.Error())
+			})
+		}
+	}()
+}
+
+func (a *app) HasActiveCollaboration() bool {
+	return a.collaborationController != nil && a.collaborationController.Active()
+}
+
+func (a *app) DoOpenCollaborationPanel() {
+	a.ShowLayout(lnode.NameCollaboration, true)
+}
+
+func (a *app) leaveCollaborationAfterAttachmentFailure() {
+	ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+	defer cancel()
+	if err := a.collaborationController.Leave(ctx); err != nil {
+		log.Error().Err(err).Msg("Unable to clean up unattached collaboration session")
+	}
+}
+
+// APHELION EDIT ADDITION END
 
 // DoSave saves current active map.
 func (a *app) DoSave() {
@@ -276,7 +384,7 @@ func (a *app) DoPaste() {
 	log.Print("do paste")
 	if ws, ok := a.activeWsMap(); ok {
 		ws.Map().Editor().TilePasteSelected()
-		ws.Map().Editor().CommitChanges("Paste Tile")
+		ws.Map().Editor().CommitOperation("Paste Tile")
 	}
 }
 
@@ -285,7 +393,7 @@ func (a *app) DoCut() {
 	log.Print("do cut")
 	if ws, ok := a.activeWsMap(); ok {
 		ws.Map().Editor().TileCutSelected()
-		ws.Map().Editor().CommitChanges("Cut Tile")
+		ws.Map().Editor().CommitOperation("Cut Tile")
 	}
 }
 
@@ -294,7 +402,7 @@ func (a *app) DoDelete() {
 	log.Print("do delete")
 	if ws, ok := a.activeWsMap(); ok {
 		ws.Map().Editor().TileDeleteSelected()
-		ws.Map().Editor().CommitChanges("Delete Tile")
+		ws.Map().Editor().CommitOperation("Delete Tile")
 	}
 }
 

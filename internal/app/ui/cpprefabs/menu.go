@@ -88,7 +88,7 @@ func (p *Prefabs) doDelete(node *prefabNode) func() {
 	return func() {
 		log.Print("do delete prefab:", node.orig.Id())
 		p.app.CurrentEditor().InstancesDeleteByPrefab(node.orig)
-		p.app.CurrentEditor().CommitChanges("Delete Instances")
+		p.app.CurrentEditor().CommitOperation("Delete Instances")
 
 		// Delete the prefab from the prefabs list if it's not an initial one (which is always the first in the list).
 		if node.orig.Id() != p.nodes[0].orig.Id() {

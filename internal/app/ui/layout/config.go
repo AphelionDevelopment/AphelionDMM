@@ -5,7 +5,8 @@ import "github.com/rs/zerolog/log"
 const (
 	configName    = "layout"
 	configVersion = 1
-	configState   = 1
+	// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: configState = 1
+	configState = 2
 )
 
 type layoutConfig struct {

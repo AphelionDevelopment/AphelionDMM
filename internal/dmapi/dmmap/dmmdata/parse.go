@@ -261,6 +261,7 @@ func parse(file namedReader) (*DmmData, error) {
 			}
 		} else {
 			if inCoordBlock {
+				/* APHELION EDIT REMOVAL START - STATIC_ANALYSIS
 				if c == ',' {
 					if readingAxis == X {
 						currX = currNum
@@ -290,7 +291,42 @@ func parse(file namedReader) (*DmmData, error) {
 					}
 					currNum = 10*currNum + int(x)
 				}
+				APHELION EDIT REMOVAL END */
+				// APHELION EDIT ADDITION START - STATIC_ANALYSIS
+				switch c {
+				case ',':
+					switch readingAxis {
+					case X:
+						currX = currNum
+						currNum = 0
+						baseX = currX
+						readingAxis = Y
+					case Y:
+						currY = currNum
+						currNum = 0
+						readingAxis = Z
+					default:
+						return nil, lineErr("incorrect number of axis [%d]", readingAxis)
+					}
+				case ')':
+					if readingAxis != Z {
+						return nil, lineErr("incorrect reading axis [%d] (expected %d)", readingAxis, Z)
+					}
+					currZ = currNum
+					currNum = 0
+					dmmData.MaxZ = max(dmmData.MaxZ, currZ)
+					inCoordBlock = false
+					readingAxis = X
+				default:
+					x, err := strconv.ParseInt(string(c), 10, 16)
+					if err != nil {
+						return nil, lineErr("%w", err)
+					}
+					currNum = 10*currNum + int(x)
+				}
+				// APHELION EDIT ADDITION END
 			} else if inMapString {
+				/* APHELION EDIT REMOVAL START - STATIC_ANALYSIS
 				if c == '"' {
 					if err := finishLine(); err != nil {
 						return nil, err
@@ -312,6 +348,31 @@ func parse(file namedReader) (*DmmData, error) {
 						currX++
 					}
 				}
+				APHELION EDIT REMOVAL END */
+				// APHELION EDIT ADDITION START - STATIC_ANALYSIS
+				switch c {
+				case '"':
+					if err := finishLine(); err != nil {
+						return nil, err
+					}
+					inMapString = false
+					dmmData.MaxY = max(dmmData.MaxY, currY-1)
+				case '\r':
+					dmmData.LineBreak = "\r\n" // Windows line break for sure.
+				case '\n':
+					if err := finishLine(); err != nil {
+						return nil, err
+					}
+					lineNo++
+				default:
+					currKey = append(currKey, c)
+					if len(currKey) == dmmData.KeyLength {
+						dmmData.Grid[util.Point{X: currX, Y: currY, Z: currZ}] = Key(currKey)
+						currKey = currKey[:0]
+						currX++
+					}
+				}
+				// APHELION EDIT ADDITION END
 			} else if c == '(' {
 				inCoordBlock = true
 			} else if c == '"' {

@@ -27,7 +27,10 @@ type App interface {
 
 type editor interface {
 	Dmm() *dmmap.Dmm
-	CommitChanges(string)
+	CommitOperation(string)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	BeginTileChange(util.Point)
+	// APHELION EDIT ADDITION END
 	InstanceSelect(i *dmminstance.Instance)
 	UpdateCanvasByCoords([]util.Point)
 }
@@ -89,6 +92,9 @@ func (p *Panel) showNudgeOption(label string, xAxis bool, instance *dmminstance.
 	value := int32(pixelX)
 
 	onChange := func() {
+		// APHELION EDIT ADDITION START - COLLABORATION
+		p.editor.BeginTileChange(instance.Coord())
+		// APHELION EDIT ADDITION END
 		origPrefab := instance.Prefab()
 
 		newVars := dmvars.Set(origPrefab.Vars(), nudgeVarName, strconv.Itoa(int(value)))
@@ -101,7 +107,7 @@ func (p *Panel) showNudgeOption(label string, xAxis bool, instance *dmminstance.
 		p.sanitizeInstanceVar(instance, nudgeVarName, "0")
 		dmmap.PrefabStorage.Put(instance.Prefab())
 		p.editor.InstanceSelect(instance)
-		go p.editor.CommitChanges("Quick Edit: " + label)
+		p.editor.CommitOperation("Quick Edit: " + label)
 	}
 
 	imgui.SetNextItemWidth(window.PointSize() * 50)
@@ -165,6 +171,9 @@ func (p *Panel) showDirOption(instance *dmminstance.Instance) {
 	label := fmt.Sprint("Dir##dir_", p.editor.Dmm().Name)
 
 	onChange := func() {
+		// APHELION EDIT ADDITION START - COLLABORATION
+		p.editor.BeginTileChange(instance.Coord())
+		// APHELION EDIT ADDITION END
 		origPrefab := instance.Prefab()
 
 		newDir := strconv.Itoa(_relativeIndexToDir[value])
@@ -178,7 +187,7 @@ func (p *Panel) showDirOption(instance *dmminstance.Instance) {
 		p.sanitizeInstanceVar(instance, "dir", "0")
 		dmmap.PrefabStorage.Put(instance.Prefab())
 		p.editor.InstanceSelect(instance)
-		go p.editor.CommitChanges("Quick Edit: Dir")
+		p.editor.CommitOperation("Quick Edit: Dir")
 	}
 
 	imgui.SetNextItemWidth(window.PointSize() * 50)

@@ -1,11 +1,14 @@
 package editor
 
 import (
+	"sdmm/internal/aphelion/collab/executor"
+	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/canvas"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/overlay"
 	"sdmm/internal/dmapi/dm"
+	"sdmm/internal/dmapi/dmenv"
 	"sdmm/internal/dmapi/dmmap"
 	"sdmm/internal/dmapi/dmmap/dmmdata/dmmprefab"
 	"sdmm/internal/dmapi/dmmap/dmminstance"
@@ -26,6 +29,16 @@ type Editor struct {
 	flickInstance []overlay.FlickInstance
 
 	areasZones []AreaZone
+
+	// APHELION EDIT ADDITION START - COLLABORATION
+	executor           executor.Executor
+	documentID         model.DocumentID
+	actorID            model.ActorID
+	authoritative      model.Snapshot
+	authoritativeTiles map[model.Coord]model.TileState
+	pendingChanges     map[model.Coord]model.TileState
+	collaborationErr   error
+	// APHELION EDIT ADDITION END
 }
 
 func (e *Editor) SetFlickAreas(flickAreas []overlay.FlickArea) {
@@ -66,8 +79,12 @@ type app interface {
 
 	SyncPrefabs()
 	SyncVarEditor()
+	RunLater(func())
 
 	Prefs() prefs.Prefs
+	// APHELION EDIT ADDITION START - COLLABORATION
+	LoadedEnvironment() *dmenv.Dme
+	// APHELION EDIT ADDITION END
 }
 
 type attachedMap interface {
@@ -94,6 +111,9 @@ func New(app app, attachedMap attachedMap, dmm *dmmap.Dmm) *Editor {
 		pMap: attachedMap,
 		dmm:  dmm,
 	}
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.initializeCollaboration()
+	// APHELION EDIT ADDITION END
 	e.updateAreasZones()
 	return e
 }
@@ -132,6 +152,9 @@ func (e *Editor) ReplacePrefab(oldPrefab, newPrefab *dmmprefab.Prefab) {
 	for _, tile := range e.dmm.Tiles {
 		for _, instance := range tile.Instances() {
 			if instance.Prefab().Id() == oldPrefab.Id() {
+				// APHELION EDIT ADDITION START - COLLABORATION
+				e.BeginTileChange(tile.Coord)
+				// APHELION EDIT ADDITION END
 				instance.SetPrefab(newPrefab)
 			}
 		}

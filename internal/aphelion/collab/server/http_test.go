@@ -1,0 +1,143 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"sdmm/internal/aphelion/collab/protocol"
+)
+
+func TestValidateListenAddressRequiresLoopback(t *testing.T) {
+	t.Parallel()
+
+	for _, address := range []string{"127.0.0.1:0", "localhost:0", "[::1]:0"} {
+		if err := ValidateListenAddress(address, false); err != nil {
+			t.Errorf("ValidateListenAddress(%q) error = %v", address, err)
+		}
+	}
+	for _, address := range []string{"0.0.0.0:0", "[::]:0", "192.0.2.1:8080"} {
+		if err := ValidateListenAddress(address, false); err == nil {
+			t.Errorf("ValidateListenAddress(%q) error = nil", address)
+		}
+	}
+}
+
+func TestHTTPLaunchTokenIsSingleUseAndBodiesAreBounded(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	launchToken, err := service.NewLaunchToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testServer := httptest.NewServer(service.Handler())
+	defer testServer.Close()
+
+	snapshot := testSnapshot(t, 1)
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, testServer.URL+"/v1/sessions", launchToken, body)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
+	var created CreateSessionResponse
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.SessionID == "" || created.OwnerToken == "" {
+		t.Fatalf("created session lacks identifiers: %#v", created)
+	}
+
+	second := postJSON(t, testServer.URL+"/v1/sessions", launchToken, body)
+	defer func() { _ = second.Body.Close() }()
+	if second.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("second token redemption status = %d, want %d", second.StatusCode, http.StatusUnauthorized)
+	}
+
+	oversized := bytes.Repeat([]byte("x"), MaxHTTPBodyBytes+1)
+	tooLarge := postJSON(t, testServer.URL+"/v1/sessions", "invalid", oversized)
+	defer func() { _ = tooLarge.Body.Close() }()
+	if tooLarge.StatusCode != http.StatusRequestEntityTooLarge && tooLarge.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("oversized status = %d, want bounded rejection", tooLarge.StatusCode)
+	}
+}
+
+func TestHTTPHealthAndVersion(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(ServiceConfig{})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	defer testServer.Close()
+	for _, path := range []string{"/v1/health/live", "/v1/health/ready", "/v1/version"} {
+		response, err := http.Get(testServer.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			_ = response.Body.Close()
+			t.Fatalf("GET %s status = %d, want 200", path, response.StatusCode)
+		}
+		_ = response.Body.Close()
+	}
+}
+
+func TestHTTPLaunchTokenExpires(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	service := NewService(ServiceConfig{LaunchTokenTTL: time.Minute, Now: func() time.Time { return now }})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	token, err := service.NewLaunchToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	testServer := httptest.NewServer(service.Handler())
+	defer testServer.Close()
+	body, err := json.Marshal(map[string]any{"snapshot": testSnapshot(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, testServer.URL+"/v1/sessions", token, body)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expired launch token status = %d, want 401", response.StatusCode)
+	}
+}
+
+func postJSON(t *testing.T, url, token string, body []byte) *http.Response {
+	t.Helper()
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestProtocolEnvelopeLimitMatchesHTTPBound(t *testing.T) {
+	t.Parallel()
+	if protocol.MaxMessageBytes > MaxHTTPBodyBytes {
+		t.Fatalf("WebSocket limit %d exceeds HTTP limit %d", protocol.MaxMessageBytes, MaxHTTPBodyBytes)
+	}
+	if strings.TrimSpace(WebSocketSubprotocol) == "" {
+		t.Fatal("WebSocket subprotocol is empty")
+	}
+}

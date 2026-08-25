@@ -1,6 +1,7 @@
 package layout
 
 import (
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/config"
 	"sdmm/internal/app/ui/cpenvironment"
 	"sdmm/internal/app/ui/cpprefabs"
@@ -15,6 +16,9 @@ import (
 )
 
 type app interface {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	collabui.PanelApp
+	// APHELION EDIT ADDITION END
 	cpenvironment.App
 	cpprefabs.App
 	cpsearch.App
@@ -57,6 +61,9 @@ type Layout struct {
 	Search      *cpsearch.Search
 	WsArea      *cpwsarea.WsArea
 	VarEditor   *cpvareditor.VarEditor
+	// APHELION EDIT ADDITION START - COLLABORATION
+	Collaboration *collabui.Panel
+	// APHELION EDIT ADDITION END
 
 	tmpNextShowNode  []string
 	tmpNextFocusNode string
@@ -71,12 +78,18 @@ func New(app app) *Layout {
 	l.Search = new(cpsearch.Search)
 	l.WsArea = new(cpwsarea.WsArea)
 	l.VarEditor = new(cpvareditor.VarEditor)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	l.Collaboration = new(collabui.Panel)
+	// APHELION EDIT ADDITION END
 
 	l.Environment.Init(app)
 	l.Prefabs.Init(app)
 	l.Search.Init(app)
 	l.WsArea.Init(app)
 	l.VarEditor.Init(app)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	l.Collaboration.Init(app)
+	// APHELION EDIT ADDITION END
 
 	return l
 }
@@ -88,6 +101,9 @@ func (l *Layout) Process() {
 	l.showPrefabsNode()
 	l.showSearchNode()
 	l.showVariablesNode()
+	// APHELION EDIT ADDITION START - COLLABORATION
+	l.showCollaborationNode()
+	// APHELION EDIT ADDITION END
 	l.showWorkspaceAreaNode() // The latest node will have a focus by default
 
 	l.initialized = true
@@ -138,6 +154,14 @@ func (l *Layout) showSearchNode() {
 func (l *Layout) showVariablesNode() {
 	l.wrapNode(lnode.NameVariables, l.rightDownNodeId, l.VarEditor)
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+
+func (l *Layout) showCollaborationNode() {
+	l.wrapNode(lnode.NameCollaboration, l.rightDownNodeId, l.Collaboration)
+}
+
+// APHELION EDIT ADDITION END
 
 const (
 	ratioL2C   = .2 // The left panel

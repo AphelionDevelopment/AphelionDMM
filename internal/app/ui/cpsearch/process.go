@@ -164,7 +164,7 @@ func (s *Search) doDeleteAll() {
 		s.app.CurrentEditor().InstanceDelete(instance)
 	}
 	s.Sync()
-	s.app.CurrentEditor().CommitChanges("Delete All")
+	s.app.CurrentEditor().CommitOperation("Delete All")
 }
 
 func (s *Search) doReplaceAll() {
@@ -174,7 +174,7 @@ func (s *Search) doReplaceAll() {
 			s.app.CurrentEditor().InstanceReplace(instance, selectedPrefab)
 		}
 		s.Sync()
-		s.app.CurrentEditor().CommitChanges("Replace All")
+		s.app.CurrentEditor().CommitOperation("Replace All")
 	}
 }
 
@@ -206,7 +206,7 @@ func (s *Search) deleteInstance(idx int) {
 	instance := s.results()[idx]
 	editor := s.app.CurrentEditor()
 	editor.InstanceDelete(instance)
-	editor.CommitChanges("Delete Instance")
+	editor.CommitOperation("Delete Instance")
 	s.selectedResultIdx = -1
 	s.Sync()
 }
@@ -217,7 +217,7 @@ func (s *Search) replaceInstance(idx int) {
 		instance := s.results()[idx]
 		editor := s.app.CurrentEditor()
 		editor.InstanceReplace(instance, selectedPrefab)
-		editor.CommitChanges("Replace Instance")
+		editor.CommitOperation("Replace Instance")
 		s.selectedResultIdx = -1
 		s.Sync()
 	}

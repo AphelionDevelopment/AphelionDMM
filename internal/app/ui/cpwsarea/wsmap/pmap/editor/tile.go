@@ -60,6 +60,9 @@ func (e *Editor) TilePasteSelected() {
 	toolSelect.PreSelectArea(tilesToSelect)
 
 	for pos, tileCopy := range tilesToPaste {
+		// APHELION EDIT ADDITION START - COLLABORATION
+		e.BeginTileChange(pos)
+		// APHELION EDIT ADDITION END
 		tile := e.Dmm().GetTile(pos)
 
 		currTilePrefabs := tile.Instances().Prefabs()
@@ -101,6 +104,9 @@ func (e *Editor) TileDeleteSelected() {
 // TileDelete deletes content of the tile with the provided coord.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileDelete(coord util.Point) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(coord)
+	// APHELION EDIT ADDITION END
 	tile := e.dmm.GetTile(coord)
 	e.tileDelete(tile)
 	tile.InstancesRegenerate()
@@ -117,6 +123,9 @@ func (e *Editor) tileDelete(tile *dmmap.Tile) {
 // TileReplace replaces content of the tile with the provided coord with provided prefabs.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileReplace(coord util.Point, prefabs dmmdata.Prefabs) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(coord)
+	// APHELION EDIT ADDITION END
 	tile := e.dmm.GetTile(coord)
 
 	e.tileDelete(tile)

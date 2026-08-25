@@ -83,12 +83,14 @@ func (a *app) loadPreferencesConfig() {
 	a.ConfigRegister(cfg)
 	a.validateCodeEditor(cfg)
 
-	window.SetFps(cfg.Prefs.Interface.Fps)
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: window.SetFps(cfg.Prefs.Interface.Fps)
+	window.SetFps(cfg.Interface.Fps)
 }
 
 // Ensure code editor is in PATH otherwise default
 func (a *app) validateCodeEditor(cfg *preferencesConfig) {
-	switch cfg.Prefs.Editor.CodeEditor {
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: switch cfg.Prefs.Editor.CodeEditor {
+	switch cfg.Editor.CodeEditor {
 	case prefs.CodeEditorVSC:
 		if _, err := exec.LookPath(prefs.CodeEditorVSCActual); err != nil {
 			if _, err := exec.LookPath(prefs.CodeEditorDMActual); err == nil {

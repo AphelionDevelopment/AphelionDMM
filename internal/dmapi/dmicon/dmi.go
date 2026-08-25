@@ -100,7 +100,8 @@ func loadRgbaImage(path string) (*image.NRGBA, error) {
 		log.Printf("unable to open image file [%s]: %s", path, err)
 		return nil, err
 	}
-	defer f.Close()
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	imgOs, _, err := image.Decode(f)
 	if err != nil {

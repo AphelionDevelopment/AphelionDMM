@@ -44,10 +44,15 @@ func (w *Window) startFrame() {
 }
 
 func runLaterJobs() {
-	for _, job := range laterJobs {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	laterJobsMutex.Lock()
+	jobs := laterJobs
+	laterJobs = nil
+	laterJobsMutex.Unlock()
+	// APHELION EDIT ADDITION END
+	for _, job := range jobs {
 		job()
 	}
-	laterJobs = nil
 }
 
 func runRepeatJobs() {

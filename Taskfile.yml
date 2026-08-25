@@ -41,7 +41,7 @@ tasks:
   build-parser:
     dir: third_party/sdmmparser/src
     vars:
-      RUST_TARGET_DYN: "{{if eq .OS \"Windows_NT\"}}stable-x86_64-pc-windows-gnu{{else}}stable{{end}}"
+      RUST_TARGET_DYN: "{{if eq .OS \"Windows_NT\"}}1.82.0-x86_64-pc-windows-gnu{{else}}1.82.0{{end}}"
       RUSTUP_TOOLCHAIN: "{{.RUST_TARGET | default .RUST_TARGET_DYN}}"
     cmds:
       - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo build --release --locked
@@ -54,6 +54,26 @@ tasks:
     cmds:
       - task: build-parser
       - task: build-editor
+
+  test-go:
+    cmds:
+      - go test ./... -count=1
+
+  test-rust:
+    dir: third_party/sdmmparser/src
+    vars:
+      RUST_TARGET_DYN: "{{if eq .OS \"Windows_NT\"}}1.82.0-x86_64-pc-windows-gnu{{else}}1.82.0{{end}}"
+      RUSTUP_TOOLCHAIN: "{{.RUST_TARGET | default .RUST_TARGET_DYN}}"
+    cmds:
+      - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo test --locked
+      - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo fmt --all -- --check
+      - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo clippy --all-targets --locked -- -D warnings
+
+  verify:
+    cmds:
+      - task: test-go
+      - task: test-rust
+      - task: build
 
   run:
     deps:

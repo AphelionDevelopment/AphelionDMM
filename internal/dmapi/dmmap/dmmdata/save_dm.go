@@ -3,7 +3,7 @@ package dmmdata
 import (
 	"bufio"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"sdmm/internal/util"
@@ -11,54 +11,79 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// SaveDM writes DmmData in DM format to a file with the provided path.
-func (d DmmData) SaveDM(path string) {
+// APHELION EDIT ADDITION START - ATOMIC_SAVE
+// SaveDM atomically writes DmmData in DM format to the provided path.
+func (d DmmData) SaveDM(path string) error {
 	log.Print("saving dmm data in format...")
-
-	f, err := os.Create(path)
-	if err != nil {
-		log.Printf("unable to save as [%s]: %v", d, err)
-		return
+	if err := SaveAtomic(path, d.WriteDM, func(stagedPath string) error {
+		return d.validateSaved(stagedPath, false)
+	}); err != nil {
+		return fmt.Errorf("save DM map %q: %w", path, err)
 	}
-	defer f.Close()
+	log.Printf("[%s] saved in format to: %s", d, path)
+	return nil
+}
 
-	w := bufio.NewWriter(f)
-	write := func(str string) {
-		_, _ = w.WriteString(str)
+// WriteDM serializes DmmData in DM format.
+func (d DmmData) WriteDM(writer io.Writer) error {
+	buffer := bufio.NewWriter(writer)
+	write := func(value string) error {
+		if _, err := buffer.WriteString(value); err != nil {
+			return fmt.Errorf("write DM map: %w", err)
+		}
+		return nil
 	}
 
 	log.Print("writing prefabs...")
 
 	for _, key := range d.Keys() {
-		write(toDMStr(key, d.Dictionary[key]))
-		write(d.LineBreak)
+		if err := write(toDMStr(key, d.Dictionary[key])); err != nil {
+			return err
+		}
+		if err := write(d.LineBreak); err != nil {
+			return err
+		}
 	}
 
 	log.Print("writing grid...")
 
 	for z := 1; z <= d.MaxZ; z++ {
-		write(d.LineBreak)
-		write(fmt.Sprintf("(1,1,%d) = {\"", z))
-		write(d.LineBreak)
+		if err := write(d.LineBreak); err != nil {
+			return err
+		}
+		if err := write(fmt.Sprintf("(1,1,%d) = {\"", z)); err != nil {
+			return err
+		}
+		if err := write(d.LineBreak); err != nil {
+			return err
+		}
 
 		for y := d.MaxY; y >= 1; y-- {
 			for x := 1; x <= d.MaxX; x++ {
-				write(string(d.Grid[util.Point{X: x, Y: y, Z: z}]))
+				if err := write(string(d.Grid[util.Point{X: x, Y: y, Z: z}])); err != nil {
+					return err
+				}
 			}
-			write(d.LineBreak)
+			if err := write(d.LineBreak); err != nil {
+				return err
+			}
 		}
 
-		write("\"}")
+		if err := write("\"}"); err != nil {
+			return err
+		}
 	}
 
-	write(d.LineBreak)
-
-	if err = w.Flush(); err != nil {
-		log.Printf("unable to write to [%s]: %v", path, err)
+	if err := write(d.LineBreak); err != nil {
+		return err
 	}
-
-	log.Printf("[%s] saved in format to: %s", d, path)
+	if err := buffer.Flush(); err != nil {
+		return fmt.Errorf("flush DM map: %w", err)
+	}
+	return nil
 }
+
+// APHELION EDIT ADDITION END
 
 func toDMStr(key Key, prefabs Prefabs) string {
 	sb := strings.Builder{}

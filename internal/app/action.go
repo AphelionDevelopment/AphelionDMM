@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/render"
 	"sdmm/internal/app/ui/cpwsarea/wsmap"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/editor"
+	"sdmm/internal/app/window"
 	"sdmm/internal/dmapi/dmmap/dmminstance"
 	"sdmm/internal/env"
 
@@ -215,6 +217,27 @@ func (a *app) SyncPrefabs() {
 func (a *app) SyncVarEditor() {
 	a.layout.VarEditor.Sync()
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+func (a *app) RunLater(job func()) {
+	window.RunLater(job)
+}
+
+func (a *app) CollaborationViewModel() collabui.ViewModel {
+	if a.collaborationClient == nil {
+		return collabui.BuildViewModel(collabui.SessionStatus{})
+	}
+	return collabui.BuildViewModel(a.collaborationClient.Status())
+}
+
+func (a *app) CollaborationPresence() []collabui.ObservedPresence {
+	if a.collaborationClient == nil {
+		return nil
+	}
+	return a.collaborationClient.ObservedPresence()
+}
+
+// APHELION EDIT ADDITION END
 
 // AreaBordersRendering returns true if an area borders rendering enabled.
 func (a *app) AreaBordersRendering() bool {

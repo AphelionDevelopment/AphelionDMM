@@ -18,11 +18,17 @@ func (e *Editor) InstanceSelect(i *dmminstance.Instance) {
 
 // InstanceMoveToTop swaps the provided instance with the one which is upper.
 func (e *Editor) InstanceMoveToTop(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(i.Coord())
+	// APHELION EDIT ADDITION END
 	e.instanceMove(e.dmm.GetTile(i.Coord()), i, true)
 }
 
 // InstanceMoveToBottom swaps the provided instance with the one which is under.
 func (e *Editor) InstanceMoveToBottom(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(i.Coord())
+	// APHELION EDIT ADDITION END
 	e.instanceMove(e.dmm.GetTile(i.Coord()), i, false)
 }
 
@@ -60,6 +66,9 @@ func (e *Editor) instanceMove(tile *dmmap.Tile, i *dmminstance.Instance, top boo
 
 // InstanceDelete deletes the provided instance from the map.
 func (e *Editor) InstanceDelete(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(i.Coord())
+	// APHELION EDIT ADDITION END
 	tile := e.dmm.GetTile(i.Coord())
 	tile.InstancesRemoveByInstance(i)
 	tile.InstancesRegenerate()
@@ -69,6 +78,9 @@ func (e *Editor) InstanceDelete(i *dmminstance.Instance) {
 func (e *Editor) InstancesDeleteByPrefab(prefab *dmmprefab.Prefab) {
 	instances := e.InstancesFindByPrefabId(prefab.Id())
 	for _, instance := range instances {
+		// APHELION EDIT ADDITION START - COLLABORATION
+		e.BeginTileChange(instance.Coord())
+		// APHELION EDIT ADDITION END
 		tile := e.dmm.GetTile(instance.Coord())
 		tile.InstancesRemoveByInstance(instance)
 		tile.InstancesRegenerate()
@@ -77,6 +89,9 @@ func (e *Editor) InstancesDeleteByPrefab(prefab *dmmprefab.Prefab) {
 
 // InstanceReplace replaces the provided instance with the provided prefab.
 func (e *Editor) InstanceReplace(i *dmminstance.Instance, prefab *dmmprefab.Prefab) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(i.Coord())
+	// APHELION EDIT ADDITION END
 	tile := e.dmm.GetTile(i.Coord())
 
 	instances := tile.Instances()
@@ -92,6 +107,9 @@ func (e *Editor) InstanceReplace(i *dmminstance.Instance, prefab *dmmprefab.Pref
 
 // InstanceReset resets the provided instance to the initial state (no custom variables).
 func (e *Editor) InstanceReset(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.BeginTileChange(i.Coord())
+	// APHELION EDIT ADDITION END
 	i.SetPrefab(dmmap.PrefabStorage.Initial(i.Prefab().Path()))
 }
 

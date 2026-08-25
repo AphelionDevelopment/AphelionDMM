@@ -1,0 +1,15 @@
+"a" = (/obj/foo1)
+"b" = (/obj/foo2)
+"c" = (/obj/foo3)
+"d" = (/obj/foo4)
+"e" = (/obj/foo5)
+"f" = (/obj/foo6)
+
+(1,1,1) = {"
+fedcb
+edcba
+dcbaf
+cbafe
+bafed
+afedc
+"}

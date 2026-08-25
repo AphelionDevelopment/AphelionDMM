@@ -11,6 +11,9 @@ type Instance struct {
 	id     uint64
 	coord  util.Point
 	prefab *dmmprefab.Prefab
+	// APHELION EDIT ADDITION START - COLLABORATION
+	stableID string
+	// APHELION EDIT ADDITION END
 }
 
 func (i *Instance) SetPrefab(prefab *dmmprefab.Prefab) {
@@ -22,8 +25,22 @@ func (i Instance) Copy() Instance {
 		id:     i.id,
 		coord:  i.coord,
 		prefab: i.prefab,
+		// APHELION EDIT ADDITION START - COLLABORATION
+		stableID: i.stableID,
+		// APHELION EDIT ADDITION END
 	}
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+func (i Instance) StableID() string {
+	return i.stableID
+}
+
+func (i *Instance) SetStableID(stableID string) {
+	i.stableID = stableID
+}
+
+// APHELION EDIT ADDITION END
 
 func (i Instance) Id() uint64 {
 	return i.id
@@ -43,5 +60,8 @@ func New(coord util.Point, prefab *dmmprefab.Prefab) *Instance {
 		id,
 		coord,
 		prefab,
+		// APHELION EDIT ADDITION START - COLLABORATION
+		"",
+		// APHELION EDIT ADDITION END
 	}
 }

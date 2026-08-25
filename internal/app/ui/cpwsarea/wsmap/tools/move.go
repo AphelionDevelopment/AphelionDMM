@@ -41,6 +41,9 @@ func (ToolMove) AltBehaviour() bool {
 
 func (t *ToolMove) onStart(util.Point) {
 	if hoveredInstance := ed.HoveredInstance(); hoveredInstance != nil {
+		// APHELION EDIT ADDITION START - COLLABORATION
+		ed.BeginTileChange(hoveredInstance.Coord())
+		// APHELION EDIT ADDITION END
 		ed.InstanceSelect(hoveredInstance)
 		t.instance = hoveredInstance
 		t.lastMouseCoords = imgui.MousePos()
@@ -92,6 +95,9 @@ func (t *ToolMove) onMove(coord util.Point) {
 	}
 	t.lastTile = ed.Dmm().GetTile(coord)
 	ed.InstanceDelete(t.instance)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	ed.BeginTileChange(t.lastTile.Coord)
+	// APHELION EDIT ADDITION END
 	t.lastTile.InstancesAdd(prefab)
 	t.lastTile.InstancesRegenerate()
 	for _, found := range t.lastTile.Instances() {
@@ -119,5 +125,5 @@ func (t *ToolMove) onStop(util.Point) {
 	}
 	t.instance = nil
 	t.lastTile = nil
-	go ed.CommitChanges("Moved Prefab")
+	ed.CommitOperation("Moved Prefab")
 }

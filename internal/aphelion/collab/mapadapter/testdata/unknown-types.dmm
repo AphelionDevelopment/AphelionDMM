@@ -1,0 +1,9 @@
+"a" = (/area/foo,/turf/foo,/obj/foo1{dir = 2; text = "a\"b"})
+"b" = (/area/foo,/turf/foo,/obj/unknown_aphelion{opaque = list(1, 2)})
+
+(1,1,1) = {"
+a
+"}
+(1,1,2) = {"
+b
+"}

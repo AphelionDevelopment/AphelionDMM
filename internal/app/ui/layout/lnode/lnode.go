@@ -7,4 +7,7 @@ const (
 	NamePrefabs       = "Prefabs"
 	NameSearch        = "Search"
 	NameVariables     = "Variables"
+	// APHELION EDIT ADDITION START - COLLABORATION
+	NameCollaboration = "Collaboration Session"
+	// APHELION EDIT ADDITION END
 )

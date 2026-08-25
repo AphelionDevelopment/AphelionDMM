@@ -30,15 +30,24 @@ func (e *Editor) onMapSizeChange(maxZ int) {
 	e.pMap.Snapshot().Sync() // Do a full snapshots sync.
 	e.pMap.OnMapSizeChange()
 	e.updateAreasZones()
+	// APHELION EDIT ADDITION START - COLLABORATION
+	e.initializeCollaboration()
+	// APHELION EDIT ADDITION END
 }
 
-// CommitChanges triggers a snapshot to commit changes and create a patch between two map states.
-func (e *Editor) CommitChanges(commitMsg string) {
-	go e.commitChanges(commitMsg)
+// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: CommitChanges used asynchronous snapshot comparison.
+func (e *Editor) CommitOperation(commitMsg string) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if e.collaborationErr == nil && e.executor != nil {
+		e.commitOperation(commitMsg)
+		return
+	}
+	e.commitChangesLegacy(commitMsg)
+	// APHELION EDIT ADDITION END
 }
 
-// Used as a wrapper to do a stuff inside the goroutine.
-func (e *Editor) commitChanges(commitMsg string) {
+// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: func (e *Editor) commitChanges(commitMsg string)
+func (e *Editor) commitChangesLegacy(commitMsg string) {
 	stateId, tilesToUpdate := e.pMap.Snapshot().Commit()
 
 	// Do not push command if there is no tiles to update.

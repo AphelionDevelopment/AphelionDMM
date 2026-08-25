@@ -1,13 +1,14 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sdmm/third_party/sdmmparser"
-	"time"
 	"sort"
+	"time"
 
 	"sdmm/internal/app/ui/cpwsarea/workspace"
 	"sdmm/internal/app/ui/dialog"
@@ -265,14 +266,49 @@ func (a *app) loadMap(path string, workspace *workspace.Workspace) {
 }
 
 func (a *app) closeEnvironment(callback func(bool)) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	completeReplacement, err := a.collaborationProjectReplacementGuard()
+	if err != nil {
+		log.Error().Err(err).Msg("unable to prepare environment replacement")
+		util.ShowErrorDialog("Unable to close environment: " + err.Error())
+		if callback != nil {
+			callback(false)
+		}
+		return
+	}
+	// APHELION EDIT ADDITION END
+
 	// NewMap workspaces depend on the opened environment, so we close them too.
 	a.layout.WsArea.CloseAllCreateMaps()
-	a.layout.WsArea.CloseAllMaps(func(closed bool) {
+	// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: a.layout.WsArea.CloseAllMaps(func(closed bool) {
+	a.layout.WsArea.CloseAllMapsGuarded(completeReplacement, func(closed bool) {
 		if callback != nil {
 			callback(closed)
 		}
 	})
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+
+func (a *app) collaborationProjectReplacementGuard() (func() bool, error) {
+	replacementPermit, err := a.collaborationController.BeginProjectReplacement()
+	if err != nil {
+		return nil, err
+	}
+	return func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		if err := a.collaborationController.CompleteProjectReplacement(ctx, replacementPermit); err != nil {
+			log.Error().Err(err).Msg("unable to complete project replacement")
+			util.ShowErrorDialog("Unable to close project: " + err.Error())
+			return false
+		}
+		a.collaborationEditor = nil
+		return true
+	}, nil
+}
+
+// APHELION EDIT ADDITION END
 
 // Frees all resources connected with opened environment.
 func (a *app) freeEnvironmentResources() {

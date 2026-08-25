@@ -140,7 +140,7 @@ func (t *TileMenu) doMoveToTop(i *dmminstance.Instance) func() {
 	return func() {
 		log.Printf("do move instance[%s] to top: %d", i.Prefab().Path(), i.Id())
 		t.editor.InstanceMoveToTop(i)
-		t.editor.CommitChanges("Move to Top")
+		t.editor.CommitOperation("Move to Top")
 	}
 }
 
@@ -148,7 +148,7 @@ func (t *TileMenu) doMoveToBottom(i *dmminstance.Instance) func() {
 	return func() {
 		log.Printf("do move instance[%s] to bottom: %d", i.Prefab().Path(), i.Id())
 		t.editor.InstanceMoveToBottom(i)
-		t.editor.CommitChanges("Move to Bottom")
+		t.editor.CommitOperation("Move to Bottom")
 	}
 }
 
@@ -163,7 +163,7 @@ func (t *TileMenu) doDelete(i *dmminstance.Instance) func() {
 	return func() {
 		log.Printf("do delete instance[%s]: %d", i.Prefab().Path(), i.Id())
 		t.editor.InstanceDelete(i)
-		t.editor.CommitChanges("Delete Instance")
+		t.editor.CommitOperation("Delete Instance")
 	}
 }
 
@@ -172,7 +172,7 @@ func (t *TileMenu) doReplace(i *dmminstance.Instance) func() {
 		if prefab, ok := t.app.SelectedPrefab(); ok {
 			log.Printf("do replace instance[%s] with [%s]: %d", i.Prefab().Path(), prefab.Path(), i.Id())
 			t.editor.InstanceReplace(i, prefab)
-			t.editor.CommitChanges("Replace Instance")
+			t.editor.CommitOperation("Replace Instance")
 		}
 	}
 }
@@ -181,7 +181,7 @@ func (t *TileMenu) doResetToDefault(i *dmminstance.Instance) func() {
 	return func() {
 		log.Printf("do reset instance[%s] to default: %d", i.Prefab().Path(), i.Id())
 		t.editor.InstanceReset(i)
-		t.editor.CommitChanges("Reset Instance")
+		t.editor.CommitOperation("Reset Instance")
 	}
 }
 

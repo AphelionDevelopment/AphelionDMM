@@ -1,0 +1,232 @@
+openapi: 3.1.0
+info:
+  title: AphelionDMM Collaboration Control API
+  version: 1.0.0
+  description: Version 1 lifecycle and snapshot contract. Filesystem paths and process commands are never accepted.
+servers:
+  - url: http://127.0.0.1
+paths:
+  /v1/sessions:
+    post:
+      operationId: createSession
+      security: [{ launchToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSessionRequest' }
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateSessionResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    get:
+      operationId: getSession
+      security: [{ bearerToken: [] }]
+      responses:
+        '200':
+          description: Session metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}/join-tokens:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    post:
+      operationId: createJoinToken
+      security: [{ bearerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateJoinTokenRequest' }
+      responses:
+        '201':
+          description: Short-lived scoped join token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinToken' }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}/snapshot:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    get:
+      operationId: getSnapshot
+      security: [{ bearerToken: [] }]
+      responses:
+        '200':
+          description: Authoritative collaboration snapshot
+          headers:
+            ETag:
+              schema: { type: string, maxLength: 128 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Snapshot' }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/sessions/{session_id}/exports:
+    parameters: [{ $ref: '#/components/parameters/SessionID' }]
+    post:
+      operationId: createExportCheckpoint
+      security: [{ bearerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '202':
+          description: Export checkpoint accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportCheckpoint' }
+        '403': { $ref: '#/components/responses/Error' }
+        '501': { $ref: '#/components/responses/Error' }
+  /v1/health/live:
+    get:
+      operationId: getLiveness
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+  /v1/health/ready:
+    get:
+      operationId: getReadiness
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/version:
+    get:
+      operationId: getVersion
+      responses:
+        '200':
+          description: Build and compatibility versions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Version' }
+components:
+  securitySchemes:
+    launchToken: { type: http, scheme: bearer, description: Single-use embedded launch token }
+    bearerToken: { type: http, scheme: bearer }
+  parameters:
+    SessionID:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  responses:
+    Error:
+      description: Bounded stable error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Health:
+      description: Health status
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [status]
+            properties:
+              status: { type: string, enum: [ok] }
+  schemas:
+    SHA256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    Role:
+      type: string
+      enum: [viewer, editor, owner]
+    CreateSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [snapshot]
+      properties:
+        snapshot: { $ref: '#/components/schemas/Snapshot' }
+    CreateSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session_id, document_id, revision, map_hash, owner_token, owner_token_expires_at]
+      properties:
+        session_id: { type: string, minLength: 1, maxLength: 128 }
+        document_id: { type: string, format: uuid }
+        revision: { type: integer, minimum: 0 }
+        map_hash: { $ref: '#/components/schemas/SHA256' }
+        owner_token: { type: string, minLength: 1, maxLength: 128 }
+        owner_token_expires_at: { type: string, format: date-time }
+    Session:
+      type: object
+      additionalProperties: false
+      required: [session_id, document_id, protocol_version, schema_version, revision, map_hash]
+      properties:
+        session_id: { type: string, minLength: 1, maxLength: 128 }
+        document_id: { type: string, format: uuid }
+        protocol_version: { type: integer, const: 1 }
+        schema_version: { type: integer, const: 1 }
+        revision: { type: integer, minimum: 0 }
+        map_hash: { $ref: '#/components/schemas/SHA256' }
+    CreateJoinTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [role, display_name]
+      properties:
+        role: { $ref: '#/components/schemas/Role' }
+        display_name: { type: string, minLength: 1, maxLength: 128 }
+    JoinToken:
+      type: object
+      additionalProperties: false
+      required: [token, actor_id, role, expires_at]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 128 }
+        actor_id: { type: string, format: uuid }
+        role: { $ref: '#/components/schemas/Role' }
+        expires_at: { type: string, format: date-time }
+    Snapshot:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, schema_version, document_id, revision, environment_hash, max_x, max_y, max_z, tiles]
+      properties:
+        protocol_version: { type: integer, const: 1 }
+        schema_version: { type: integer, const: 1 }
+        document_id: { type: string, format: uuid }
+        revision: { type: integer, minimum: 0 }
+        environment_hash: { $ref: '#/components/schemas/SHA256' }
+        max_x: { type: integer, minimum: 1 }
+        max_y: { type: integer, minimum: 1 }
+        max_z: { type: integer, minimum: 1 }
+        tiles: { type: array, maxItems: 16777216, items: { type: object } }
+    ExportRequest:
+      type: object
+      additionalProperties: false
+      required: [revision, map_hash]
+      properties:
+        revision: { type: integer, minimum: 0 }
+        map_hash: { $ref: '#/components/schemas/SHA256' }
+    ExportCheckpoint:
+      type: object
+      additionalProperties: false
+      required: [checkpoint_id, revision, map_hash, status]
+      properties:
+        checkpoint_id: { type: string, minLength: 1, maxLength: 128 }
+        revision: { type: integer, minimum: 0 }
+        map_hash: { $ref: '#/components/schemas/SHA256' }
+        status: { type: string, enum: [accepted, complete, failed] }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 128 }
+        message: { type: string, minLength: 1, maxLength: 512 }
+        current_revision: { type: integer, minimum: 0 }
+        current_map_hash: { $ref: '#/components/schemas/SHA256' }
+    Version:
+      type: object
+      additionalProperties: false
+      required: [build, revision, protocol_versions, schema_versions]
+      properties:
+        build: { type: string, maxLength: 128 }
+        revision: { type: string, maxLength: 128 }
+        protocol_versions: { type: array, maxItems: 16, items: { type: integer } }
+        schema_versions: { type: array, maxItems: 16, items: { type: integer } }

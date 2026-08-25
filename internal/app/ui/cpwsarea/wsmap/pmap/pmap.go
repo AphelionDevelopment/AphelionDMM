@@ -1,6 +1,7 @@
 package pmap
 
 import (
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/render"
@@ -53,6 +54,10 @@ type App interface {
 
 	SyncPrefabs()
 	SyncVarEditor()
+	// APHELION EDIT ADDITION START - COLLABORATION
+	RunLater(func())
+	CollaborationPresence() []collabui.ObservedPresence
+	// APHELION EDIT ADDITION END
 }
 
 var (
@@ -196,6 +201,10 @@ func New(app App, dmm *dmmap.Dmm) *PaneMap {
 }
 
 func (p *PaneMap) Process() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	p.editor.ProcessCollaborationUpdates()
+	// APHELION EDIT ADDITION END
+
 	// Enforce a focus to the current window if the canvas was touched.
 	if p.canvasControl.Touched() && !imgui.IsWindowFocusedV(imgui.FocusedFlagsRootAndChildWindows) {
 		imgui.SetWindowFocus()
@@ -270,6 +279,9 @@ func (p *PaneMap) showCanvas() {
 		uvMin, uvMax,
 		style.ColorWhitePacked,
 	)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	p.showCollaborationPresence()
+	// APHELION EDIT ADDITION END
 }
 
 func (p *PaneMap) mouseChangeCallback(x, y uint) {

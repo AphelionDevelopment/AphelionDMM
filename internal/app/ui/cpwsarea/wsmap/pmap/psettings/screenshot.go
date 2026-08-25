@@ -172,7 +172,8 @@ func saveScreenshotToFile(dstFilePath string, pixels []byte, w, h int) error {
 	}
 
 	err = png.Encode(out, util.PixelsToRGBA(pixels, w, h))
-	defer out.Close()
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: defer out.Close()
+	defer func() { _ = out.Close() }()
 	return err
 }
 

@@ -37,5 +37,10 @@ func (ws *WsCreateMap) save(newPath string) {
 		}
 	}
 
-	data.Save()
+	// APHELION EDIT ADDITION START - ATOMIC_SAVE
+	if err := data.Save(); err != nil {
+		log.Error().Err(err).Msg("unable to save new map")
+		util.ShowErrorDialog("Unable to save the new map: " + err.Error())
+	}
+	// APHELION EDIT ADDITION END
 }

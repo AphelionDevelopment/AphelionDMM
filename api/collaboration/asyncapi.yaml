@@ -1,0 +1,98 @@
+asyncapi: 3.0.0
+info:
+  title: AphelionDMM Collaboration Stream API
+  version: 1.0.0
+  description: Bounded JSON durable-operation and lossy-presence stream. Compression is disabled in protocol version 1.
+servers:
+  loopback:
+    host: 127.0.0.1
+    protocol: ws
+channels:
+  collaboration:
+    address: /v1/collaboration
+    messages:
+      join: { $ref: '#/components/messages/join' }
+      operation_submit: { $ref: '#/components/messages/operation_submit' }
+      inverse_request: { $ref: '#/components/messages/inverse_request' }
+      presence_update: { $ref: '#/components/messages/presence_update' }
+      acknowledged_revision: { $ref: '#/components/messages/acknowledged_revision' }
+      ping: { $ref: '#/components/messages/ping' }
+      joined: { $ref: '#/components/messages/joined' }
+      operation_accepted: { $ref: '#/components/messages/operation_accepted' }
+      operation_rejected: { $ref: '#/components/messages/operation_rejected' }
+      replay_complete: { $ref: '#/components/messages/replay_complete' }
+      presence_snapshot: { $ref: '#/components/messages/presence_snapshot' }
+      session_notice: { $ref: '#/components/messages/session_notice' }
+      pong: { $ref: '#/components/messages/pong' }
+operations:
+  receiveClientMessages:
+    action: receive
+    channel: { $ref: '#/channels/collaboration' }
+    messages:
+      - { $ref: '#/channels/collaboration/messages/join' }
+      - { $ref: '#/channels/collaboration/messages/operation_submit' }
+      - { $ref: '#/channels/collaboration/messages/inverse_request' }
+      - { $ref: '#/channels/collaboration/messages/presence_update' }
+      - { $ref: '#/channels/collaboration/messages/acknowledged_revision' }
+      - { $ref: '#/channels/collaboration/messages/ping' }
+  sendServerMessages:
+    action: send
+    channel: { $ref: '#/channels/collaboration' }
+    messages:
+      - { $ref: '#/channels/collaboration/messages/joined' }
+      - { $ref: '#/channels/collaboration/messages/operation_accepted' }
+      - { $ref: '#/channels/collaboration/messages/operation_rejected' }
+      - { $ref: '#/channels/collaboration/messages/replay_complete' }
+      - { $ref: '#/channels/collaboration/messages/presence_snapshot' }
+      - { $ref: '#/channels/collaboration/messages/presence_update' }
+      - { $ref: '#/channels/collaboration/messages/session_notice' }
+      - { $ref: '#/channels/collaboration/messages/pong' }
+components:
+  messages:
+    join: { name: join, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
+    operation_submit: { name: operation_submit, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
+    inverse_request: { name: inverse_request, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
+    presence_update: { name: presence_update, payload: { $ref: '#/components/schemas/Envelope' } }
+    acknowledged_revision: { name: acknowledged_revision, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
+    ping: { name: ping, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
+    joined: { name: joined, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    operation_accepted: { name: operation_accepted, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    operation_rejected: { name: operation_rejected, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    replay_complete: { name: replay_complete, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    presence_snapshot: { name: presence_snapshot, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    session_notice: { name: session_notice, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+    pong: { name: pong, payload: { $ref: '#/components/schemas/ServerEnvelope' } }
+  schemas:
+    Envelope:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, message_id, session_id, type, payload]
+      properties:
+        protocol_version: { type: integer, const: 1 }
+        message_id: { type: string, minLength: 1, maxLength: 128 }
+        session_id: { type: string, minLength: 1, maxLength: 128 }
+        type: { type: string, minLength: 1, maxLength: 128 }
+        payload: { type: object }
+    ClientEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties:
+            type:
+              enum: [join, operation_submit, inverse_request, presence_update, acknowledged_revision, ping]
+    ServerEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties:
+            type:
+              enum: [joined, operation_accepted, operation_rejected, replay_complete, presence_snapshot, presence_update, session_notice, pong]
+    StableError:
+      type: object
+      additionalProperties: false
+      required: [code, message, revision, map_hash]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 128 }
+        message: { type: string, minLength: 1, maxLength: 512 }
+        revision: { type: integer, minimum: 0 }
+        map_hash: { type: string, pattern: '^[0-9a-f]{64}$' }

@@ -4,9 +4,11 @@ go 1.24.0
 
 require (
 	github.com/SpaiR/imgui-go v1.12.1-0.20220214190844-a0bad21e1c5d
+	github.com/coder/websocket v1.8.15
 	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a
 	github.com/go-gl/mathgl v1.2.0
+	github.com/google/uuid v1.6.0
 	github.com/matishsiao/goInfo v0.0.0-20210923090445-da2e3fa8d45f
 	github.com/mazznoer/csscolorparser v0.1.6
 	github.com/minio/selfupdate v0.6.0
@@ -15,6 +17,8 @@ require (
 	github.com/sqweek/dialog v0.0.0-20240226140203-065105509627
 	github.com/stretchr/testify v1.10.0
 	golang.design/x/clipboard v0.7.1
+	golang.org/x/sys v0.38.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -28,6 +32,4 @@ require (
 	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect
 	golang.org/x/image v0.28.0 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

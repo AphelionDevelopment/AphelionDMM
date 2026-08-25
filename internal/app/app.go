@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,9 +9,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"sdmm/internal/aphelion/collab/model"
+	collabserver "sdmm/internal/aphelion/collab/server"
+	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/config"
 	"sdmm/internal/app/render/brush"
+	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/editor"
 	"sdmm/internal/app/ui/dialog"
 	"sdmm/internal/app/ui/layout"
 	"sdmm/internal/app/ui/menu"
@@ -20,6 +25,7 @@ import (
 	"sdmm/internal/dmapi/dmenv"
 	"sdmm/internal/dmapi/dmmclip"
 	"sdmm/internal/env"
+	"sdmm/internal/util"
 
 	"github.com/SpaiR/imgui-go"
 	"github.com/matishsiao/goInfo"
@@ -95,6 +101,11 @@ type app struct {
 
 	commandStorage *command.Storage
 	clipboard      *dmmclip.Clipboard
+	// APHELION EDIT ADDITION START - COLLABORATION
+	collaborationClient     *collabui.SessionClient
+	collaborationController *collabui.Controller
+	collaborationEditor     *editor.Editor
+	// APHELION EDIT ADDITION END
 
 	menu   *menu.Menu
 	layout *layout.Layout
@@ -115,6 +126,12 @@ func (a *app) initialize() {
 	a.commandStorage = command.NewStorage()
 	a.pathsFilter = dm.NewPathsFilterEmpty()
 	a.clipboard = dmmclip.New()
+	// APHELION EDIT ADDITION START - COLLABORATION
+	a.collaborationClient = collabui.NewSessionClient(collabui.SessionClientConfig{})
+	a.collaborationController = collabui.NewController(func(ctx context.Context, snapshot model.Snapshot) (collabui.EmbeddedService, error) {
+		return collabserver.StartEmbedded(ctx, snapshot)
+	}, a.collaborationClient)
+	// APHELION EDIT ADDITION END
 
 	a.menu = menu.New(a)
 	a.layout = layout.New(a)
@@ -150,6 +167,21 @@ func (a *app) PostProcess() {
 
 func (a *app) CloseCheck() {
 	log.Print("run close check")
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if a.HasActiveCollaboration() {
+		guard, err := a.collaborationProjectReplacementGuard()
+		if err != nil {
+			log.Error().Err(err).Msg("unable to prepare application close")
+			util.ShowErrorDialog("Unable to close application: " + err.Error())
+			a.closed = false
+			return
+		}
+		a.layout.WsArea.CloseAllMapsGuarded(guard, func(closed bool) {
+			a.closed = closed
+		})
+		return
+	}
+	// APHELION EDIT ADDITION END
 	a.layout.WsArea.CloseAllMaps(func(closed bool) {
 		a.closed = closed
 	})
@@ -164,6 +196,15 @@ func (a *app) LayoutIniPath() string {
 }
 
 func (a *app) dispose() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if a.collaborationController != nil {
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := a.collaborationController.Leave(shutdownContext); err != nil {
+			log.Error().Err(err).Msg("leave collaboration session during shutdown")
+		}
+		cancelShutdown()
+	}
+	// APHELION EDIT ADDITION END
 	brush.Dispose()
 	a.configSave()
 	a.masterWindow.Dispose()
@@ -206,7 +247,8 @@ func (a *app) dropTmpState() {
 }
 
 func (a *app) updateScale() {
-	window.SetPointSize(float32(a.preferencesConfig().Prefs.Interface.Scale) / 100)
+	// APHELION EDIT CHANGE - STATIC_ANALYSIS - ORIGINAL: window.SetPointSize(float32(a.preferencesConfig().Prefs.Interface.Scale) / 100)
+	window.SetPointSize(float32(a.preferencesConfig().Interface.Scale) / 100)
 }
 
 // Checks the version of the layout in the user config data and the app itself.

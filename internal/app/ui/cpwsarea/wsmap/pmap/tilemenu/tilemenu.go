@@ -44,7 +44,10 @@ type App interface {
 type editor interface {
 	Dmm() *dmmap.Dmm
 
-	CommitChanges(string)
+	CommitOperation(string)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	BeginTileChange(util.Point)
+	// APHELION EDIT ADDITION END
 
 	InstanceSelect(i *dmminstance.Instance)
 	InstanceMoveToTop(i *dmminstance.Instance)

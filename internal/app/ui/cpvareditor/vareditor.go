@@ -158,8 +158,11 @@ func (v *VarEditor) setInstanceVariable(varName, varValue string) {
 		v.sessionPrefabId = newPrefab.Id()
 	}
 
+	// APHELION EDIT ADDITION START - COLLABORATION
+	v.app.CurrentEditor().BeginTileChange(v.instance.Coord())
+	// APHELION EDIT ADDITION END
 	v.instance.SetPrefab(newPrefab)
-	v.app.CurrentEditor().CommitChanges("Edit Variable")
+	v.app.CurrentEditor().CommitOperation("Edit Variable")
 	v.app.DoSelectPrefab(newPrefab)
 
 	v.prefab = newPrefab
@@ -185,7 +188,7 @@ func (v *VarEditor) setPrefabVariable(varName, varValue string) {
 	newPrefab := dmmap.PrefabStorage.Get(v.prefab.Path(), newVars)
 
 	v.app.CurrentEditor().ReplacePrefab(v.prefab, newPrefab)
-	v.app.CurrentEditor().CommitChanges("Replace Prefab")
+	v.app.CurrentEditor().CommitOperation("Replace Prefab")
 
 	v.app.DoSelectPrefab(newPrefab)
 

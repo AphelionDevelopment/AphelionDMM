@@ -94,7 +94,7 @@ func (t *ToolFill) onStop(util.Point) {
 			}
 		}
 
-		go ed.CommitChanges("Fill Atoms")
+		ed.CommitOperation("Fill Atoms")
 	}
 
 	t.start = util.Point{}

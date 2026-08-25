@@ -29,14 +29,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
         include:
           - os: ubuntu-latest
-            rust-target: 1.82-x86_64-unknown-linux-gnu
+            rust-target: 1.82.0-x86_64-unknown-linux-gnu
           - os: windows-latest
-            rust-target: 1.82-x86_64-pc-windows-gnu
-          - os: macos-latest
-            rust-target: 1.82-x86_64-apple-darwin
+            rust-target: 1.82.0-x86_64-pc-windows-gnu
+          - os: macos-15-intel
+            rust-target: 1.82.0-x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     name: Build - ${{ matrix.os }}
     steps:
@@ -60,12 +60,24 @@ jobs:
       - name: Setup Task
         uses: arduino/setup-task@v2
         with:
+          version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust
+        run: rustup toolchain install "${{ matrix.rust-target }}" --profile minimal --component rustfmt --component clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: third_party/sdmmparser/src
+
+      - name: Test Go
+        run: task test-go
+
+      - name: Test Rust
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: task test-rust
 
       - if: contains(matrix.os, 'windows')
         name: Pre Build (Windows)

@@ -69,5 +69,6 @@ fn meta2json(metadata: Metadata) -> String {
         states,
     };
 
-    return serde_json::to_string(&icon_metadata).unwrap();
+    // APHELION EDIT CHANGE - TOOLCHAIN_BASELINE - ORIGINAL: return serde_json::to_string(&icon_metadata).unwrap();
+    serde_json::to_string(&icon_metadata).unwrap()
 }

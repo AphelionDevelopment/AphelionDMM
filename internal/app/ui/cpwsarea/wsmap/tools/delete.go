@@ -40,7 +40,7 @@ func (t *ToolDelete) onStart(coord util.Point) {
 		t.onMove(coord)
 	} else if hoveredInstance := ed.HoveredInstance(); hoveredInstance != nil {
 		ed.InstanceDelete(hoveredInstance)
-		go ed.CommitChanges("Delete Instance")
+		ed.CommitOperation("Delete Instance")
 	}
 }
 
@@ -55,6 +55,6 @@ func (t *ToolDelete) onMove(coord util.Point) {
 func (t *ToolDelete) onStop(util.Point) {
 	if len(t.deletedTiles) != 0 {
 		t.deletedTiles = make(map[util.Point]bool, len(t.deletedTiles))
-		go ed.CommitChanges("Delete Tiles")
+		ed.CommitOperation("Delete Tiles")
 	}
 }

@@ -87,7 +87,12 @@ func (sp *saveProcess) sanitizeVariables() {
 				continue
 			}
 
-			obj := sp.dme.Objects[prefab.Path()]
+			// APHELION EDIT ADDITION START - COLLABORATION
+			obj, exists := sp.dme.Objects[prefab.Path()]
+			if !exists {
+				continue
+			}
+			// APHELION EDIT ADDITION END
 			vars := prefab.Vars()
 
 			for _, varName := range prefab.Vars().Iterate() {

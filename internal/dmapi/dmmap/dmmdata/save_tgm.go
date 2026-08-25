@@ -3,7 +3,7 @@ package dmmdata
 import (
 	"bufio"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"sdmm/internal/util"
@@ -11,57 +11,79 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// SaveTGM writes DmmData in TGM format to a file with the provided path.
-func (d DmmData) SaveTGM(path string) {
+// APHELION EDIT ADDITION START - ATOMIC_SAVE
+// SaveTGM atomically writes DmmData in TGM format to the provided path.
+func (d DmmData) SaveTGM(path string) error {
 	log.Print("saving dmm data in [TGM] format...")
-
-	f, err := os.Create(path)
-	if err != nil {
-		log.Printf("unable to save as [TGM] [%s]: %v", d, err)
-		return
+	if err := SaveAtomic(path, d.WriteTGM, func(stagedPath string) error {
+		return d.validateSaved(stagedPath, true)
+	}); err != nil {
+		return fmt.Errorf("save TGM map %q: %w", path, err)
 	}
-	defer f.Close()
+	log.Printf("[%s] saved in [TGM] format to: %s", d, path)
+	return nil
+}
 
-	w := bufio.NewWriter(f)
-	writeln := func(str ...string) {
-		for _, s := range str {
-			_, _ = w.WriteString(s)
+// WriteTGM serializes DmmData in TGM format.
+func (d DmmData) WriteTGM(writer io.Writer) error {
+	buffer := bufio.NewWriter(writer)
+	writeln := func(values ...string) error {
+		for _, value := range values {
+			if _, err := buffer.WriteString(value); err != nil {
+				return fmt.Errorf("write TGM map: %w", err)
+			}
 		}
-		_, _ = w.WriteString(d.LineBreak)
+		if _, err := buffer.WriteString(d.LineBreak); err != nil {
+			return fmt.Errorf("write TGM map: %w", err)
+		}
+		return nil
 	}
 
 	// Write TGM header
 	// yeah, yeah, dmm2tgm.py, sure...
-	writeln("//MAP CONVERTED BY dmm2tgm.py THIS HEADER COMMENT PREVENTS RECONVERSION, DO NOT REMOVE")
+	if err := writeln("//MAP CONVERTED BY dmm2tgm.py THIS HEADER COMMENT PREVENTS RECONVERSION, DO NOT REMOVE"); err != nil {
+		return err
+	}
 
 	log.Print("writing prefabs...")
 
 	for _, key := range d.Keys() {
-		writeln(toTGMStr(key, d.Dictionary[key], d.LineBreak))
+		if err := writeln(toTGMStr(key, d.Dictionary[key], d.LineBreak)); err != nil {
+			return err
+		}
 	}
 
 	log.Print("writing grid...")
 
 	for z := 1; z <= d.MaxZ; z++ {
-		writeln()
+		if err := writeln(); err != nil {
+			return err
+		}
 
 		for x := 1; x <= d.MaxX; x++ {
-			writeln(fmt.Sprintf("(%d,1,%d) = {\"", x, z))
-
-			for y := d.MaxY; y >= 1; y-- {
-				writeln(string(d.Grid[util.Point{X: x, Y: y, Z: z}]))
+			if err := writeln(fmt.Sprintf("(%d,1,%d) = {\"", x, z)); err != nil {
+				return err
 			}
 
-			writeln("\"}")
+			for y := d.MaxY; y >= 1; y-- {
+				if err := writeln(string(d.Grid[util.Point{X: x, Y: y, Z: z}])); err != nil {
+					return err
+				}
+			}
+
+			if err := writeln("\"}"); err != nil {
+				return err
+			}
 		}
 	}
 
-	if err = w.Flush(); err != nil {
-		log.Printf("unable to write to [%s]: %v", path, err)
+	if err := buffer.Flush(); err != nil {
+		return fmt.Errorf("flush TGM map: %w", err)
 	}
-
-	log.Printf("[%s] saved in [TGM] format to: %s", d, path)
+	return nil
 }
+
+// APHELION EDIT ADDITION END
 
 func toTGMStr(key Key, content Prefabs, lineBreak string) string {
 	sb := strings.Builder{}

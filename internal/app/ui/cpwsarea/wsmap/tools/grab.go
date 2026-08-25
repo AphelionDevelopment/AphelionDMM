@@ -213,7 +213,7 @@ func (t *ToolGrab) onStop(util.Point) {
 		t.stopSelectArea()
 	case tSelectModeMoveArea:
 		t.stopMoveArea()
-		go ed.CommitChanges("Move Grabbed Area")
+		ed.CommitOperation("Move Grabbed Area")
 	}
 
 	t.dragging = false

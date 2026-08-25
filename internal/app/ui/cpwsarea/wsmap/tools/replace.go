@@ -28,8 +28,9 @@ func (ToolReplace) AltBehaviour() bool {
 func (t ToolReplace) onStart(util.Point) {
 	if hoveredInstance := ed.HoveredInstance(); hoveredInstance != nil {
 		if selectedPrefab, ok := ed.SelectedPrefab(); ok {
-			hoveredInstance.SetPrefab(selectedPrefab)
-			ed.CommitChanges("Replace Instance")
+			// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: hoveredInstance.SetPrefab(selectedPrefab)
+			ed.InstanceReplace(hoveredInstance, selectedPrefab)
+			ed.CommitOperation("Replace Instance")
 		}
 	}
 }

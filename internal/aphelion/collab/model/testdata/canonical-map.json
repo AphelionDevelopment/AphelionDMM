@@ -1,0 +1,33 @@
+{
+  "protocol_version": 1,
+  "schema_version": 1,
+  "document_id": "01890f3e-7b5c-7abc-8def-0123456789ab",
+  "revision": 4,
+  "environment_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "max_x": 2,
+  "max_y": 1,
+  "max_z": 1,
+  "tiles": [
+    {
+      "coord": {"x": 2, "y": 1, "z": 1},
+      "state": {"prefabs": []}
+    },
+    {
+      "coord": {"x": 1, "y": 1, "z": 1},
+      "state": {
+        "prefabs": [
+          {
+            "stable_id": "01890f3e-7b5c-7abc-8def-0123456789ac",
+            "path": "/obj/foo1",
+            "vars": {"pixel_x": "-1", "dir": "2"}
+          },
+          {
+            "stable_id": "01890f3e-7b5c-7abc-8def-0123456789ad",
+            "path": "/obj/foo2",
+            "vars": {}
+          }
+        ]
+      }
+    }
+  ]
+}

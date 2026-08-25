@@ -132,6 +132,9 @@ func New(dme *dmenv.Dme, data *dmmdata.DmmData, backup string) (dmm *Dmm, unknow
 					} else {
 						log.Print("unknown prefab:", prefab.Path())
 						unknownPrefabs[prefab.Path()] = prefab
+						// APHELION EDIT ADDITION START - COLLABORATION
+						tile.InstancesAdd(PrefabStorage.Put(prefab))
+						// APHELION EDIT ADDITION END
 					}
 				}
 
