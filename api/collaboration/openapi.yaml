@@ -3,6 +3,9 @@ info:
   title: AphelionDMM Collaboration Control API
   version: 1.0.0
   description: Version 1 lifecycle and snapshot contract. Filesystem paths and process commands are never accepted.
+  license:
+    name: MIT
+    identifier: MIT
 servers:
   - url: http://127.0.0.1
   - url: https://collaboration.example
@@ -68,6 +71,7 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
   /v1/sessions:
     post:
+      summary: Create an embedded collaboration session
       operationId: createSession
       security: [{ launchToken: [] }]
       requestBody:
@@ -86,6 +90,7 @@ paths:
   /v1/sessions/{session_id}:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     get:
+      summary: Get collaboration session metadata
       operationId: getSession
       security: [{ bearerToken: [] }]
       responses:
@@ -98,6 +103,8 @@ paths:
   /v1/sessions/{session_id}/join-tokens:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     post:
+      summary: Create a short-lived embedded-mode join token
+      description: Hosted sessions use OIDC-bound hosted invitations and cannot mint embedded identities.
       operationId: createJoinToken
       security: [{ bearerToken: [] }]
       requestBody:
@@ -153,6 +160,7 @@ paths:
   /v1/sessions/{session_id}/snapshot:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     get:
+      summary: Get the authoritative collaboration snapshot
       operationId: getSnapshot
       security: [{ bearerToken: [] }]
       responses:
@@ -168,6 +176,7 @@ paths:
   /v1/sessions/{session_id}/exports:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     post:
+      summary: Request a staged export checkpoint
       operationId: createExportCheckpoint
       security: [{ bearerToken: [] }]
       requestBody:
@@ -185,18 +194,24 @@ paths:
         '501': { $ref: '#/components/responses/Error' }
   /v1/health/live:
     get:
+      summary: Check process liveness
       operationId: getLiveness
+      security: []
       responses:
         '200': { $ref: '#/components/responses/Health' }
   /v1/health/ready:
     get:
+      summary: Check service and persistence readiness
       operationId: getReadiness
+      security: []
       responses:
         '200': { $ref: '#/components/responses/Health' }
         '503': { $ref: '#/components/responses/ReadinessUnavailable' }
   /v1/version:
     get:
+      summary: Get build and protocol compatibility information
       operationId: getVersion
+      security: []
       responses:
         '200':
           description: Build and compatibility versions

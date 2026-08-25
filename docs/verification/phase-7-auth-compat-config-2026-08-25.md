@@ -4,7 +4,7 @@ Date: 2026-08-25
 
 ## Scope
 
-This record covers the hosted OIDC library and session authorization boundary, the protocol compatibility matrix, and immutable hosted configuration parsing. It does not claim container, backup/restore, load/fault, deployment, or live external-issuer acceptance.
+This record covers the hosted OIDC library and session authorization boundary, the protocol compatibility matrix, and immutable hosted configuration parsing. Local signed-provider container acceptance is recorded separately in `phase-7-container-hosted-2026-08-25.md`; external-provider certification remains outstanding.
 
 ## OIDC and hosted authorization
 
@@ -15,6 +15,7 @@ This record covers the hosted OIDC library and session authorization boundary, t
 - Provider refresh tokens are not retained.
 - Login authorization and collaboration-session authorization are separate interfaces. Session roles are rechecked on join, on each client message, on owner HTTP operations, and periodically while an idle WebSocket remains connected.
 - A revoked or expired hosted authorization closes the WebSocket with a policy-violation status.
+- Hosted credentials cannot mint embedded-mode join tokens; hosted membership must use durable one-use invitations bound to OIDC identities.
 
 The signed local issuer suite covers discovery, PKCE parameters, issuer, audience, signature, expiry, nonce, `at_hash`, key rotation, state reuse, disabled identity, role changes, logout, and token expiry. It is deterministic test infrastructure, not a manual login against a deployed non-production identity provider.
 

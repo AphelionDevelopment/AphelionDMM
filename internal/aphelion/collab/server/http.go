@@ -443,7 +443,7 @@ func (service *Service) handleCreateJoinToken(writer http.ResponseWriter, reques
 	writer.Header().Set("Cache-Control", "no-store")
 	sessionID := request.PathValue("session_id")
 	authToken, _, ok := service.authorizeRecord(request, sessionID)
-	if !ok || authToken.resumption || !authToken.principal.CanAdminister() {
+	if !ok || authToken.hosted || authToken.resumption || !authToken.principal.CanAdminister() {
 		writeError(writer, http.StatusForbidden, "forbidden", "owner role is required")
 		return
 	}

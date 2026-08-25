@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Automated implementation is complete. This original checklist was not maintained while the work was executed, so its unchecked historical red-test and implementation steps are not current backlog. See `2026-08-25-multiplayer-human-test-readiness.md`; the remaining phase gate is human single-user and two-window desktop regression testing. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Read `docs/agent/multiplayer-invariants.md`, `docs/agent/architecture.md`, and `docs/agent/generated-and-external-assets.md`.
@@ -182,4 +184,3 @@ type Executor interface {
 - [ ] Unknown content survives the golden round trip.
 - [ ] Failed saves preserve the original file and successful saves reparse/hash-match.
 - [ ] The desktop entry point retains single-user edit, undo, redo, and save behavior.
-

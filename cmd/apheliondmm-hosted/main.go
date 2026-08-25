@@ -14,6 +14,7 @@ import (
 	"sdmm/internal/aphelion/collab/auth"
 	"sdmm/internal/aphelion/collab/server"
 	"sdmm/internal/aphelion/collab/store/postgres"
+	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
 var (
@@ -76,6 +77,18 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	}
 	directory := auth.NewRegistryDirectory(store)
 	authentication := auth.NewManager(flow, directory, auth.ManagerConfig{SessionDirectory: directory})
+	var observability *collabtelemetry.Telemetry
+	var shutdownTelemetry collabtelemetry.Shutdown
+	if config.Telemetry.Endpoint != "" {
+		telemetryContext, cancelTelemetryInitialization := context.WithTimeout(ctx, 10*time.Second)
+		observability, shutdownTelemetry, err = collabtelemetry.NewOTLP(telemetryContext, config.Telemetry.Endpoint)
+		cancelTelemetryInitialization()
+		if err != nil {
+			_ = store.Close()
+			_, _ = fmt.Fprintf(stderr, "initialize telemetry export: %v\n", err)
+			return 1
+		}
+	}
 	limits := server.DefaultLimits()
 	limits.MaxConnections = config.Limits.MaxConnections
 	limits.MaxOperationChanges = config.Limits.MaxOperationChanges
@@ -84,16 +97,19 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	service := server.NewService(server.ServiceConfig{
 		Store: store, Limits: limits, AllowedOrigins: []string{config.PublicOrigin}, Build: build, Revision: revision,
 		HostedAuth: authentication, HostedLogin: authentication, HostedRegistry: store,
-		Document: server.DocumentConfig{SnapshotOperationThreshold: 1000, SnapshotInterval: 5 * time.Minute},
+		Telemetry: observability,
+		Document:  server.DocumentConfig{SnapshotOperationThreshold: 1000, SnapshotInterval: 5 * time.Minute},
 	})
 	if err := service.RecoverHostedSessions(ctx); err != nil {
 		_ = service.Shutdown(context.Background())
+		shutdownTelemetryNow(shutdownTelemetry)
 		_, _ = fmt.Fprintf(stderr, "recover hosted sessions: %v\n", err)
 		return 1
 	}
 	handler, err := server.NewTrustedProxyHandler(service.Handler(), config.TrustedProxyCIDRs)
 	if err != nil {
 		_ = service.Shutdown(context.Background())
+		shutdownTelemetryNow(shutdownTelemetry)
 		_, _ = fmt.Fprintf(stderr, "initialize trusted proxy handling: %v\n", err)
 		return 1
 	}
@@ -110,6 +126,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		if err != nil && err != http.ErrServerClosed {
 			_, _ = fmt.Fprintf(stderr, "serve hosted collaboration: %v\n", err)
 			_ = service.Shutdown(context.Background())
+			shutdownTelemetryNow(shutdownTelemetry)
 			return 1
 		}
 	}
@@ -117,12 +134,29 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownContext); err != nil {
 		_ = service.Shutdown(shutdownContext)
+		shutdownTelemetryNow(shutdownTelemetry)
 		_, _ = fmt.Fprintf(stderr, "shutdown HTTP server: %v\n", err)
 		return 1
 	}
 	if err := service.Shutdown(shutdownContext); err != nil {
+		shutdownTelemetryNow(shutdownTelemetry)
 		_, _ = fmt.Fprintf(stderr, "shutdown collaboration service: %v\n", err)
 		return 1
 	}
+	if shutdownTelemetry != nil {
+		if err := shutdownTelemetry(shutdownContext); err != nil {
+			_, _ = fmt.Fprintf(stderr, "shutdown telemetry export: %v\n", err)
+			return 1
+		}
+	}
 	return 0
+}
+
+func shutdownTelemetryNow(shutdown collabtelemetry.Shutdown) {
+	if shutdown == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }

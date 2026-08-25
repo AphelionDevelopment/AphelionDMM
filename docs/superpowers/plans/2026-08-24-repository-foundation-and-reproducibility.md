@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Automated implementation is complete. This original checklist was not maintained while the work was executed, so its unchecked historical red-test and implementation steps are not current backlog. See `2026-08-25-multiplayer-human-test-readiness.md`; the remaining phase gate is human exercise of the real desktop UI. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Read `AGENTS.md`, `docs/agent/source-authority.md`, and `docs/agent/verification.md` first.
@@ -181,4 +183,3 @@ verify:
 - [ ] Static analyzers are enabled without blanket suppression.
 - [ ] The shipped desktop entry point has an evidence-producing smoke path.
 - [ ] No branding or release behavior changed.
-

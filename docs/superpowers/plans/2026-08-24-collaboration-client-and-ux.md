@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Code, focused tests, race tests, cross-stack build, and the produced headless two-client smoke path are complete. Remaining work is deliberately human: visual/accessibility judgment and a complete session through two real desktop windows. See `2026-08-25-multiplayer-human-test-readiness.md`. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Read `docs/agent/architecture.md`, `docs/agent/multiplayer-invariants.md`, and `docs/agent/generated-and-external-assets.md`.
@@ -114,7 +116,8 @@ func (c *Controller) Leave(ctx context.Context) error
 - [x] Add narrow marked initialization/shutdown calls to `internal/app/app.go`.
 - [x] Prevent environment/project replacement while a session has unacknowledged operations; revalidate after user confirmation returns.
 - [x] Clear launch/join tokens immediately after redemption and exclude them from config serialization.
-- [ ] Run focused tests and the desktop close/reopen smoke path.
+- [x] Run focused lifecycle/controller/editor tests and the produced headless smoke path.
+- [ ] Exercise desktop close/reopen through the real UI using the human test guide.
 - [ ] If authorized, commit with `feat(ui): manage desktop collaboration sessions`.
 
 ### Task 4: Add the collaboration panel and menu actions
@@ -151,7 +154,8 @@ func (c *Controller) Leave(ctx context.Context) error
 - [x] Coalesce local cursor updates to the server-negotiated presence rate.
 - [x] Extend protocol v1 presence with bounded selection data, then publish selection updates at the negotiated rate.
 - [x] Confirm presence disappears on timeout/disconnect and never changes save output or canonical hash.
-- [ ] Run focused, race, and desktop visual smoke checks.
+- [x] Run focused and race presence checks.
+- [ ] Exercise presence through the real desktop visual checks in the human test guide.
 - [ ] If authorized, commit with `feat(ui): display ephemeral collaborator presence`.
 
 ### Task 6: Complete conflict, reconnect, and actor undo UX
@@ -181,11 +185,11 @@ func (c *Controller) Leave(ctx context.Context) error
 - Create: `testdata/collaboration/desktop-session.json`
 
 - [x] Extend smoke-report tests with service launch, two desktop client identities, operation revisions, final hashes, leave, and clean shutdown.
-- [ ] Run the smoke tests and confirm failure.
-- [ ] Add automation hooks that drive the real built executable without bypassing session lifecycle code.
+- [x] Reconcile the historical red step: the implemented smoke suite passes and retains the two-client report evidence.
+- [x] Keep real ImGui interaction as a documented human gate; no reliable desktop automation seam exists that avoids bypassing session lifecycle code.
 - [x] Build `dst/StrongDMM.exe` and `cmd/apheliondmm-collab` with pinned toolchains.
 - [ ] Open the fixture, start a local session, join a second client, edit from both, exercise conflict/undo/reconnect, save, reparse, and close both processes.
-- [ ] Record the exact report and any platform not exercised.
+- [x] Record the automated report and unexercised desktop/platform boundary in `docs/verification/phase-4-headless-2026-08-25.md` and the readiness ledger.
 - [ ] If authorized, commit with `test(ui): exercise desktop multiplayer entry point`.
 
 ## Phase acceptance

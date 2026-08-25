@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Automated local durability, recovery, security, resilience, telemetry, and updater fail-closed work is complete. Remaining work is human desktop interruption testing and production signing ownership. See `2026-08-25-multiplayer-human-test-readiness.md`. Changes remain uncommitted by repository policy.
+
 **Dependency evidence:** `docs/verification/phase-5-dependency-evaluation-2026-08-25.md`
 
 **Protected toolchain evidence:** `docs/verification/toolchain-security-audit-2026-08-25.md`

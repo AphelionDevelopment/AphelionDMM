@@ -17,7 +17,7 @@ No wider pilot begins until every row below has an owner and current evidence. â
 | Path escape or command execution | Hosted protocol carries document IDs, not paths/commands; fixed executables only in operator workflows | Application/operator | security guide and config tests |
 | Secret leakage | File/named-environment indirection, regular-file/permission checks, redacted errors/telemetry, no credentials in argv | Platform/application | hosted config tests and runbooks |
 | Dependency compromise | Pinned modules/actions/toolchains, `govulncheck`, advisory review, image scan | Build/release | CI and verification records |
-| Updater/release compromise | Signed/checksummed release artifacts, least-privilege release token, draft release review, rollback | Release | updater security evidence; signing gate remains required |
+| Updater/release compromise | Checksummed artifacts, commit-pinned Sigstore-backed provenance attestation, least-privilege release token, draft release review, rollback | Release | updater security evidence; updater-compatible minisign publication remains required |
 | Backup theft or deletion | Encryption, separate backup identity, immutable retention, restore rehearsal | Database/operator | backup/restore runbooks and restore test |
 | Denial of service | Independent join/durable/presence limits, connection caps, timeouts, slow-consumer closure, edge limits | Application/edge | resilience/security tests |
 
@@ -27,4 +27,4 @@ No wider pilot begins until every row below has an owner and current evidence. â
 - A live non-production OIDC login/logout exercise is still required.
 - The 25-editor loopback public-contract gate passes, but a hosted reference run with database interruption, process restart, slow consumer, and presence flood is still required.
 - The configured telemetry endpoint is validated but no hosted OTLP exporter is wired yet; operators must not assume external metrics are emitted.
-- Release artifact signing is not yet implemented. The existing updater security controls do not substitute for a signed hosted-service release.
+- Release binaries and archives receive GitHub/Sigstore build-provenance attestations. Production self-update remains disabled until a human-controlled minisign key signs the strict manifest envelope and every platform artifact; provenance does not substitute for that updater trust root.

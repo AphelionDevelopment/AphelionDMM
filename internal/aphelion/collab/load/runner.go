@@ -150,7 +150,7 @@ func waitContext(ctx context.Context, duration time.Duration) error {
 
 func validateRunConfig(config RunConfig) error {
 	endpoint, err := url.Parse(config.Endpoint)
-	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && strings.HasPrefix(endpoint.Hostname(), "127."))) || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "https" && (endpoint.Scheme != "http" || !strings.HasPrefix(endpoint.Hostname(), "127."))) || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return fmt.Errorf("load endpoint must be HTTPS or loopback HTTP")
 	}
 	if config.Origin == "" || config.SessionID == "" || len(config.SessionID) > protocol.MaxIdentifierBytes || config.OwnerToken == "" {

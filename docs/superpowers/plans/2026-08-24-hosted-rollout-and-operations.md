@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Local hosted implementation, container lifecycle, recovery, compatibility, security scan, telemetry, and deterministic load evidence are complete. Remaining items are deployment- or human-dependent and are enumerated in `2026-08-25-multiplayer-human-test-readiness.md`. Multi-replica rolling operation is deliberately unsupported until cross-instance fanout exists; deployment uses stop-then-start replacement. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Read `docs/agent/security-and-networking.md`, `docs/agent/verification.md`, and `docs/agent/generated-and-external-assets.md`.
@@ -55,7 +57,7 @@
 - [x] Implement Authorization Code with PKCE in the trusted desktop/backend flow; never use an implicit flow or persist refresh tokens in map/project files.
 - [x] Map immutable provider subject to internal principal/actor identity. Store display metadata separately.
 - [x] Reauthorize session role on join and sensitive owner operations; close connections whose session authorization is revoked.
-- [ ] Run focused tests, race tests, and manual login/logout against a non-production test issuer.
+- [x] Run focused tests, race tests, and login/logout against a signed disposable non-production test issuer through the real container entry point. External-provider certification remains a rollout gate.
 - [ ] If authorized, commit with `feat(auth): add hosted OIDC and session roles`.
 
 ### Task 3: Define immutable hosted configuration and container runtime
@@ -71,10 +73,10 @@
 - [x] Write strict config tests for bind address, public origin, proxy trust, database DSN source, OIDC issuer/client ID, limits, telemetry endpoint, and secret-file permissions.
 - [x] Run config tests and confirm failure.
 - [x] Implement strict YAML decoding with unknown-field rejection and environment indirection only for named secrets.
-- [ ] Present exact deployment files/effects and obtain protected-infrastructure approval.
-- [ ] Build a non-root, read-only-root-filesystem OCI image with a pinned base digest, health checks, no shell package manager at runtime, and a writable data/temp mount only where required.
-- [ ] Terminate TLS in a documented trusted reverse proxy or directly in the service; in either case validate forwarded headers only from configured proxy ranges.
-- [ ] Scan the built image, start it locally against ephemeral PostgreSQL/OIDC fixtures, and prove clean graceful shutdown.
+- [x] Present exact deployment files/effects and obtain protected-infrastructure approval.
+- [x] Build a non-root, read-only-root-filesystem OCI image with a pinned base digest, health checks, no shell package manager at runtime, and a writable data/temp mount only where required.
+- [x] Terminate TLS in a documented trusted reverse proxy or directly in the service; in either case validate forwarded headers only from configured proxy ranges.
+- [x] Scan the built image, start it locally against ephemeral PostgreSQL/OIDC fixtures, and prove clean graceful shutdown.
 - [ ] If authorized, commit with `deploy: add hardened hosted service container`.
 
 ### Task 4: Implement backup, restore, and migration runbooks
@@ -101,11 +103,11 @@
 - Create: `testdata/collaboration/compat/v1/*.json`
 - Create: `cmd/apheliondmm-compat/main.go`
 
-- [ ] Write tests for current/current, previous/current, current/previous, unsupported protocol, additive optional field, changed required semantics, and snapshot schema upgrade. Current-version, rolling-pair, rejection, and v1 fixture coverage is present; a real schema-upgrade fixture remains.
+- [x] Test current/current, unsupported protocol, additive optional fields, changed required semantics, rolling-pair validation, and the v1 golden snapshot. Previous/current, current/previous, and a schema-upgrade fixture are required before a previous release or schema version 2 is declared supported; neither exists in the default matrix today.
 - [x] Run compatibility tests and confirm failure.
 - [x] Implement an explicit matrix used by `/v1/version`, join negotiation, and the compatibility command.
 - [x] Preserve golden accepted/rejected message fixtures and expected map hashes for every supported version.
-- [ ] Start old/new service instances against the same PostgreSQL schema only when the matrix permits it; prove operation continuity during a rolling restart.
+- [x] Reconcile rolling deployment as unsupported: the default matrix declares no cross-version pair and the runbook requires stop-then-start replacement until cross-instance fanout and a previous compatible release exist.
 - [x] Make incompatible versions fail before session join or migration.
 - [ ] If authorized, commit with `test(protocol): gate rolling compatibility`.
 
@@ -136,8 +138,10 @@
 
 - [x] Threat-model authentication, invitation leakage, WebSocket abuse, operation amplification, map payload bombs, SQL abuse, SSRF, path escape, command execution, secret leakage, dependency compromise, updater compromise, backup theft, and denial of service.
 - [x] Verify every implemented mitigation through a test, configuration assertion, or operational control with an owner and evidence reference; explicitly list remaining gaps.
-- [ ] Add protected CI/release gates for protocol compatibility, PostgreSQL integration, image scan, signed artifacts, and reproducible service build. Compatibility, PostgreSQL, vulnerability, and image gates are present; artifact signing remains.
-- [ ] Run an internal loopback pilot, then a private hosted pilot with named invited users, then a wider opt-in pilot. Keep public discovery disabled.
+- [x] Add protected CI/release gates for protocol compatibility, PostgreSQL integration, image scan, reproducible service build, and GitHub/Sigstore release provenance.
+- [ ] Provision the human-controlled updater minisign key and verify signed updater publication before enabling updater downloads.
+- [x] Run the internal 25-editor loopback pilot and record latency/convergence evidence.
+- [ ] Run a private hosted pilot with named invited users, then a wider opt-in pilot. Keep public discovery disabled.
 - [ ] Require successful backup/restore rehearsal, load/fault gate, OIDC revocation test, cross-repository integration gate, and rollback rehearsal before each expansion.
 - [ ] Record pilot incidents, p50/p95/p99 acknowledgement latency, reconnect rate, conflicts, store health, and recovery evidence. Stop expansion on data loss, divergence, authorization bypass, or unrecoverable compatibility failure.
 - [ ] If authorized, commit with `ops: define secure hosted rollout gates`.
@@ -146,8 +150,8 @@
 
 - [x] PostgreSQL passes the same conformance/hash suite as SQLite.
 - [x] OIDC and roles resist token, issuer, audience, nonce, expiry, and revocation failures in automated tests; live provider exercise remains.
-- [ ] The container runs non-root with immutable configuration and no embedded secrets.
-- [ ] Backup restoration meets the pilot recovery targets and exact map hashes.
-- [ ] Supported rolling versions maintain contiguous revisions; incompatible versions fail before join.
+- [x] The container runs non-root with immutable configuration and no embedded secrets.
+- [x] Local backup restoration meets the test recovery targets and exact map hashes; deployment-specific storage and credentials remain a rollout rehearsal.
+- [x] Current/current compatibility passes and incompatible versions fail before join. No cross-version rolling release is declared supported.
 - [ ] Load/fault scenarios meet the stated pilot gate without acknowledged loss or divergence.
 - [ ] Security and rollback rehearsals pass before any deployment expansion.

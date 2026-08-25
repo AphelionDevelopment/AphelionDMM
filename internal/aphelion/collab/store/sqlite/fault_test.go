@@ -41,7 +41,7 @@ func TestCorruptCopiedDatabaseFailsWithoutChangingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if corrupt, err := Open(corruptPath); err == nil {
-		defer corrupt.Close()
+		defer func() { _ = corrupt.Close() }()
 		if _, _, loadErr := corrupt.Load(context.Background(), fixture.Initial.DocumentID); loadErr == nil {
 			t.Fatal("corrupt copied database opened and loaded")
 		}
@@ -50,7 +50,7 @@ func TestCorruptCopiedDatabaseFailsWithoutChangingSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open untouched source: %v", err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	_, replay, err := reopened.Load(context.Background(), fixture.Initial.DocumentID)
 	if err != nil {
 		t.Fatalf("load untouched source: %v", err)

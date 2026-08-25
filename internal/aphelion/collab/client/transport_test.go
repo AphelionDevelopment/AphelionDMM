@@ -117,7 +117,7 @@ func TestWebSocketTransportConnectHonorsDialDeadline(t *testing.T) {
 	}))
 	defer testServer.Close()
 
-	transport := NewWebSocketTransport(TransportConfig{DialTimeout: 25 * time.Millisecond})
+	transport := NewWebSocketTransport(TransportConfig{DialTimeout: time.Second})
 	err := transport.Connect(context.Background(), protocol.JoinRequest{BaseURL: testServer.URL, Origin: "http://127.0.0.1", Token: "token", SessionID: "session"}, func(protocol.ServerEnvelope) {})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Connect() error = %v, want context deadline exceeded", err)

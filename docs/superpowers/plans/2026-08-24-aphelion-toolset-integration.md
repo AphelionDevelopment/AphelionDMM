@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** AphelionDMM and Meridian integration contracts are implemented. All Aphelion Content Tools work is frozen and excluded by explicit direction; its historical checked items are not being revalidated in this pass. See `2026-08-25-multiplayer-human-test-readiness.md`. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Before changing another repository, read its root `AGENTS.md` and routed guidance in that repository.

@@ -21,6 +21,15 @@ go test -race ./internal/aphelion/collab/load -count=1
 
 Both commands passed. The public-contract end-to-end test used three concurrent editor connections, six sequential durable operations, presence traffic, and final snapshot/hash convergence.
 
+The recorded 25-editor loopback pilot also passed after the hosted-container work:
+
+```text
+clients=25 operations=250 presence=500 p50=3.00ms p95=9.03ms p99=23.80ms revision=250
+hash=71913e2be13a2206141dd93bc0d4243eef7a47f33a92b7425ce399966189f05f
+```
+
+This is deterministic same-host public-contract evidence, not the reference hosted deployment measurement.
+
 ## Remaining acceptance
 
-The full 25-editor recorded pilot has not yet been run against a reference hosted deployment. Service restart, database interruption, slow-consumer, and presence-flood injections remain outstanding, as do hosted p50/p95/p99 measurements and the zero-loss fault gate.
+The full 25-editor recorded pilot has not yet been run against a reference hosted deployment. The OCI lifecycle gate now covers graceful service restart, durable snapshot recovery, database interruption, and readiness recovery. Slow-consumer and presence-flood injection during the reference load run remain outstanding, as do hosted p50/p95/p99 measurements and the zero-loss final-convergence fault gate.

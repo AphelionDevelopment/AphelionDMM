@@ -1,5 +1,7 @@
 # Multiplayer implementation roadmap
 
+> **Current status (2026-08-25):** Automated implementation and local verification are complete through the pre-human-test boundary, excluding Aphelion Content Tools by explicit direction. The authoritative status and remaining gates are in `2026-08-25-multiplayer-human-test-readiness.md`. The original phase checklists below are retained as implementation history; an unchecked historical red-test or conditional commit step is not automatically current backlog.
+
 Execute these plans in order. Each phase is independently reviewable and has an explicit acceptance boundary.
 
 | Phase | Plan | Produces | Entry condition |
@@ -16,3 +18,4 @@ Do not skip the deterministic local core in order to demonstrate networking. Do 
 
 Every conditional commit step requires explicit user authorization. Without that authorization, leave verified changes in the working tree and report them as uncommitted.
 
+No plan in this directory authorizes a commit or push. The current implementation remains uncommitted for review.

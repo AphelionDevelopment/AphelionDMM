@@ -302,7 +302,7 @@ func startHTTPTestSession(t *testing.T) (*Service, CreateSessionResponse, *httpt
 
 func startHTTPTestSessionWithConfig(t *testing.T, config ServiceConfig) (*Service, CreateSessionResponse, *httptest.Server) {
 	t.Helper()
-	config.OnWebSocketError = func(err error) { t.Logf("WebSocket server error: %v", err) }
+	config.OnWebSocketError = func(error) {}
 	service := NewService(config)
 	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
 	launchToken, err := service.NewLaunchToken()

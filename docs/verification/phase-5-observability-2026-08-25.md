@@ -6,9 +6,9 @@ This records acceptance evidence for the OpenTelemetry observability and readine
 
 ## Dependency decision
 
-OpenTelemetry Go API, trace SDK, and metric SDK v1.45.0 are pinned as direct dependencies. The selected release requires Go 1.25 and therefore matches the approved Go 1.25.13 repository baseline. The modules are Apache-2.0 licensed.
+OpenTelemetry Go API, trace SDK, metric SDK, and OTLP/HTTP trace and metric exporters v1.45.0 are pinned as direct dependencies. The selected release requires Go 1.25 and therefore matches the approved Go 1.25.13 repository baseline. The modules are Apache-2.0 licensed.
 
-Providers are injected through collaboration configuration. A service with no telemetry value does not initialize an exporter, make an outbound connection, or enter the instrumentation path. Constructing the telemetry facade without explicit providers uses the OpenTelemetry no-op global providers and still configures no exporter.
+Providers are injected through collaboration configuration. A service with no telemetry value does not initialize an exporter, make an outbound connection, or enter the instrumentation path. A configured HTTPS origin creates TLS-verified OTLP/HTTP trace and metric exporters, a batched trace provider, and a periodic metric reader; the hosted entry point flushes both during bounded graceful shutdown. Constructing the telemetry facade without explicit providers uses the OpenTelemetry no-op global providers and still configures no exporter.
 
 ## Implemented signals
 
@@ -46,4 +46,4 @@ go test ./internal/aphelion/collab/telemetry -run '^$' -bench 'Benchmark(Disable
 - `task verify` with Go 1.25.13 and `RUST_TARGET=1.82.0-x86_64-pc-windows-gnu`: pass, including Go tests, locked Rust tests, rustfmt, Clippy with warnings denied, release parser build, and the static Windows desktop build;
 - `git diff --check`: pass with line-ending conversion warnings only.
 
-The inherited ImGui/GCC `memset` warning remains unchanged. No exporter or collector deployment was added, and no public network was used by collaboration tests.
+The inherited ImGui/GCC `memset` warning remains unchanged. A later hosted container gate exercised real trace and metric protobuf export over its disposable private TLS sink. No collector deployment or public network was added.

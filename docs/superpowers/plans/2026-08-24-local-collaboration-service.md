@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-multiplayer-design.md`
 
+> **Status reconciliation (2026-08-25):** Automated implementation is complete. This original checklist was not maintained while the work was executed, so its unchecked historical red-test and implementation steps are not current backlog. See `2026-08-25-multiplayer-human-test-readiness.md`; the remaining phase gate is the workflow through two real desktop windows. Changes remain uncommitted by repository policy.
+
 ## Global Constraints
 
 - Read `docs/agent/security-and-networking.md` and `docs/agent/multiplayer-invariants.md`.
@@ -161,4 +163,3 @@ func (e *Embedded) Shutdown(ctx context.Context) error
 - [ ] Presence pressure cannot block durable traffic.
 - [ ] Embedded mode binds loopback with a single-use launch token.
 - [ ] Two real WebSocket clients converge through conflicts and reconnect.
-

@@ -176,15 +176,16 @@ func TestHostedOwnerOperationReauthorizesCurrentSessionRole(t *testing.T) {
 	authorizer := &fakeHostedAuthorizer{session: auth.Session{
 		ActorID: actorID, Issuer: "https://issuer.example", Subject: "owner", DisplayName: "Hosted Owner", Role: auth.RoleOwner, ExpiresAt: time.Now().Add(time.Hour),
 	}}
-	_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}, HostedAuth: authorizer})
-	body := []byte(`{"role":"viewer","display_name":"Guest"}`)
-	allowed := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", "hosted-token", body)
+	registry := newFakeHostedBackend(nil)
+	_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}, HostedAuth: authorizer, HostedRegistry: registry})
+	body := []byte(`{"role":"viewer"}`)
+	allowed := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/hosted-invitations", "hosted-token", body)
 	_ = allowed.Body.Close()
 	if allowed.StatusCode != http.StatusCreated {
 		t.Fatalf("owner request status = %d", allowed.StatusCode)
 	}
 	authorizer.setRole(auth.RoleViewer)
-	denied := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", "hosted-token", body)
+	denied := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/hosted-invitations", "hosted-token", body)
 	_ = denied.Body.Close()
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("downgraded request status = %d", denied.StatusCode)

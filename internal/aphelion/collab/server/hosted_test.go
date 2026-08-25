@@ -93,6 +93,38 @@ func TestHostedLifecycleBindsOIDCIdentityToPersistentInvitation(t *testing.T) {
 	}
 }
 
+func TestHostedOwnerCannotMintEmbeddedJoinToken(t *testing.T) {
+	now := time.Unix(15_000, 0).UTC()
+	ownerActor, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := newFakeHostedBackend(map[string]auth.Session{
+		"owner-auth": {Token: "owner-auth", ActorID: ownerActor, Issuer: "https://issuer.example", Subject: "owner", DisplayName: "Owner", Role: auth.RoleViewer, ExpiresAt: now.Add(time.Hour)},
+	})
+	service := NewService(ServiceConfig{HostedAuth: backend, HostedRegistry: backend, Now: func() time.Time { return now }})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+
+	snapshot := testSnapshot(t, 2)
+	createBody, err := json.Marshal(map[string]any{"snapshot": snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdResponse := postJSON(t, testServer.URL+"/v1/hosted/sessions", "owner-auth", createBody)
+	_ = createdResponse.Body.Close()
+	if createdResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create hosted session status = %d", createdResponse.StatusCode)
+	}
+
+	joinTokenResponse := postJSON(t, testServer.URL+"/v1/sessions/"+string(snapshot.DocumentID)+"/join-tokens", "owner-auth", []byte(`{"role":"editor","display_name":"Bypass"}`))
+	_ = joinTokenResponse.Body.Close()
+	if joinTokenResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("hosted embedded join-token status = %d, want %d", joinTokenResponse.StatusCode, http.StatusForbidden)
+	}
+}
+
 func TestRecoverHostedSessionsRestoresDurableMembership(t *testing.T) {
 	now := time.Unix(20_000, 0).UTC()
 	ownerActor, err := model.NewActorID()
