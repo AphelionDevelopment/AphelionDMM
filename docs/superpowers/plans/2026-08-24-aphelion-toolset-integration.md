@@ -30,7 +30,7 @@
 - Create: `internal/aphelion/integration/manifest/testdata/valid.json`
 - Create: `internal/aphelion/integration/manifest/testdata/incompatible.json`
 
-- [ ] Write strict schema/Go decode tests for repository identity, repository revision, DME path identifier, map target identifier, protocol version, environment hash, input/output map hash, accepted revision, content manifest hash, and producing tool versions.
+- [x] Write strict schema/Go decode tests for repository identity, repository revision, DME path identifier, map target identifier, protocol version, environment hash, input/output map hash, accepted revision, content manifest hash, and producing tool versions.
 
 ```go
 type Manifest struct {
@@ -49,10 +49,10 @@ type Manifest struct {
 }
 ```
 
-- [ ] Run `go test ./internal/aphelion/integration/manifest -count=1` and confirm failure.
-- [ ] Implement strict decoding, lowercase SHA-256 validation, supported schema/protocol checks, and canonical JSON hash generation.
-- [ ] Keep identifiers logical; resolve them to trusted local paths only in a local adapter.
-- [ ] Validate fixtures against both JSON Schema and Go decoding.
+- [x] Run `go test ./internal/aphelion/integration/manifest -count=1` and confirm failure.
+- [x] Implement strict decoding, lowercase SHA-256 validation, supported schema/protocol checks, and canonical JSON hash generation.
+- [x] Keep identifiers logical; resolve them to trusted local paths only in a local adapter.
+- [x] Validate fixtures against both JSON Schema and Go decoding.
 - [ ] If authorized, commit with `feat(integration): define Aphelion compatibility manifest`.
 
 ### Task 2: Add a bounded Meridian-MCP client adapter
@@ -63,7 +63,7 @@ type Manifest struct {
 - Create: `internal/aphelion/integration/meridian/mcp_test.go`
 - Create: `internal/aphelion/integration/meridian/testdata/fake_mcp.ps1`
 
-- [ ] Write process-protocol tests for initialize/capability negotiation, mandatory `dm_parse_environment` ordering, map inspection, diagnostics, timeout, oversized response, process exit, malformed JSON-RPC, and secret redaction.
+- [x] Write process-protocol tests for initialize/capability negotiation, mandatory `dm_parse_environment` ordering, map inspection, diagnostics, timeout, oversized response, process exit, malformed JSON-RPC, and secret redaction.
 
 ```go
 type Client interface {
@@ -81,12 +81,12 @@ type Config struct {
 }
 ```
 
-- [ ] Run `go test ./internal/aphelion/integration/meridian -run TestMCP -count=1` and confirm failure.
-- [ ] Implement a fixed stdio MCP client initialized from trusted local configuration. Do not invoke a shell; the PowerShell fixture is test-only and launched by the test harness.
-- [ ] Allow only the required fixed capability set. Do not expose a generic `CallTool` method outside the adapter package.
-- [ ] Require successful parse before map inspection/diagnostics and record MCP version/state generation.
-- [ ] Bound stdout/stderr capture and terminate the complete child process tree on timeout/cancellation.
-- [ ] Run focused tests and the installed Meridian-MCP real entry-point contract test.
+- [x] Run `go test ./internal/aphelion/integration/meridian -run TestMCP -count=1` and confirm failure.
+- [x] Implement a fixed stdio MCP client initialized from trusted local configuration. Do not invoke a shell; the PowerShell fixture is test-only and launched by the test harness.
+- [x] Allow only the required fixed capability set. Do not expose a generic `CallTool` method outside the adapter package.
+- [x] Require successful parse before map inspection/diagnostics and record MCP version/state generation.
+- [x] Bound stdout/stderr capture and terminate the complete child process tree on timeout/cancellation.
+- [x] Run focused tests and the installed Meridian-MCP real entry-point contract test.
 - [ ] If authorized, commit with `feat(integration): add bounded Meridian-MCP diagnostics adapter`.
 
 ### Task 3: Declare AphelionDMM compatibility in Meridian-MCP
@@ -99,12 +99,12 @@ type Config struct {
 - Modify: `tests/workflow_contract.rs`
 - Modify: `README.md`
 
-- [ ] Read Meridian-MCP `AGENTS.md`, `rust-toolchain.toml`, and testing guidance.
-- [ ] Add failing Rust tests that load an AphelionDMM compatibility fixture and require parse-before-map/diagnostic workflow semantics.
-- [ ] Run the exact pinned Meridian-MCP test command and confirm the new tests fail for the absent fixture/contract.
-- [ ] Add an `aphelion-dmm.json` compatibility entry naming only currently supported tools, request/response limits, repository identity expectations, and required result metadata.
-- [ ] Update documentation without adding a universal bypass, hidden restriction, remote-identity obfuscation, or generic process access.
-- [ ] Run pinned fmt, Clippy, tests, MCP conformance, and the exact installed binary smoke path.
+- [x] Read Meridian-MCP `AGENTS.md`, `rust-toolchain.toml`, and testing guidance. (No `AGENTS.md` exists in this checkout; repository trust/testing documents were read.)
+- [x] Add failing Rust tests that load an AphelionDMM compatibility fixture and require parse-before-map/diagnostic workflow semantics.
+- [x] Run the exact pinned Meridian-MCP test command and confirm the new tests fail for the absent fixture/contract.
+- [x] Add an `aphelion-dmm.json` compatibility entry naming only currently supported tools, request/response limits, repository identity expectations, and required result metadata.
+- [x] Update documentation without adding a universal bypass, hidden restriction, remote-identity obfuscation, or generic process access.
+- [x] Run pinned fmt, Clippy, tests, MCP conformance, and the exact installed binary smoke path.
 - [ ] If authorized, commit in Meridian-MCP with `docs(compat): declare AphelionDMM workflow contract`.
 
 ### Task 4: Add Content Tools backend collaboration adapter
@@ -118,14 +118,14 @@ type Config struct {
 - Create: `webapp/tests/test_collaboration_api.py`
 - Modify: `webapp/dump_openapi.py`
 
-- [ ] Read Content Tools `AGENTS.md` and the backend, export-safety, verification, and Meridian integration references.
-- [ ] Write FastAPI tests for version query, session metadata, scoped join-token creation, checkpoint request, unavailable service, protocol incompatibility, path rejection, and credential redaction.
-- [ ] Run the focused pytest file and confirm failure.
-- [ ] Implement a backend-only HTTP client with configured base URL, strict timeouts/size limits, and model validation. Do not add a generic proxy endpoint.
-- [ ] Expose only the specific collaboration lifecycle routes required by Content Tools and return bounded stable errors.
-- [ ] Preserve existing staged export rules and never write collaboration data into the canonical lore store.
-- [ ] Regenerate/check the Content Tools OpenAPI document using its real entry point.
-- [ ] Run focused tests, complete backend tests, and the shipped launcher smoke path.
+- [x] Read Content Tools `AGENTS.md` and the backend, export-safety, verification, and Meridian integration references.
+- [x] Write FastAPI tests for version query, session metadata, scoped join-token creation, checkpoint request, unavailable service, protocol incompatibility, path rejection, and credential redaction.
+- [x] Run the focused pytest file and confirm failure.
+- [x] Implement a backend-only HTTP client with configured base URL, strict timeouts/size limits, and model validation. Do not add a generic proxy endpoint.
+- [x] Expose only the specific collaboration lifecycle routes required by Content Tools and return bounded stable errors.
+- [x] Preserve existing staged export rules and never write collaboration data into the canonical lore store.
+- [x] Regenerate/check the Content Tools OpenAPI document using its real entry point.
+- [x] Run focused tests, complete backend tests, and the shipped launcher smoke path.
 - [ ] If authorized, commit in Content Tools with `feat(api): add bounded AphelionDMM collaboration adapter`.
 
 ### Task 5: Add Content Tools collaboration status UI
@@ -139,13 +139,13 @@ type Config struct {
 - Create: `webapp/frontend/src/features/collaboration/CollaborationStatus.test.tsx`
 - Modify: `webapp/frontend/src/App.tsx`
 
-- [ ] Write frontend tests for unavailable, incompatible, ready, joining, connected, checkpoint, and error states; assert tokens never enter URL/history/local storage.
-- [ ] Run the focused frontend test and confirm failure.
-- [ ] Implement typed calls only to the Content Tools backend adapter.
-- [ ] Route user-facing progress and results through the existing Parsec feedback mechanism while retaining exact diagnostics in inline accessible status/error regions.
-- [ ] Provide connection/checkpoint controls only where the backend reports compatible capabilities.
-- [ ] Do not add or alter Parsec or other creative assets.
-- [ ] Run focused frontend tests, the full frontend gate, and a browser playtest through the shipped launcher.
+- [x] Write frontend tests for unavailable, incompatible, ready, joining, connected, checkpoint, and error states; assert tokens never enter URL/history/local storage.
+- [x] Run the focused frontend test and confirm failure.
+- [x] Implement typed calls only to the Content Tools backend adapter.
+- [x] Route user-facing progress and results through the existing Parsec feedback mechanism while retaining exact diagnostics in inline accessible status/error regions.
+- [x] Provide connection/checkpoint controls only where the backend reports compatible capabilities.
+- [x] Do not add or alter Parsec or other creative assets.
+- [x] Run focused frontend tests, the full frontend gate, and a browser playtest through the shipped launcher.
 - [ ] If authorized, commit in Content Tools with `feat(ui): expose AphelionDMM collaboration status`.
 
 ### Task 6: Implement staged Meridian-Rift map acceptance
@@ -157,7 +157,7 @@ type Config struct {
 - Create: `internal/aphelion/integration/meridian/verify.go`
 - Create: `internal/aphelion/integration/meridian/verify_test.go`
 
-- [ ] Write tests for repository identity mismatch, dirty/unexpected revision policy, target containment, changed input hash, invalid stage manifest, atomic stage creation, MCP failure, PowerShell timeout, build failure, and successful evidence record.
+- [x] Write tests for repository identity mismatch, dirty/unexpected revision policy, target containment, changed input hash, invalid stage manifest, atomic stage creation, MCP failure, PowerShell timeout, build failure, and successful evidence record.
 
 ```go
 type Repository struct {
@@ -172,12 +172,12 @@ type Verifier interface {
 }
 ```
 
-- [ ] Run stage/verify tests and confirm failure.
-- [ ] Resolve repository and target IDs through immutable trusted configuration, canonicalize once, and enforce containment.
-- [ ] Stage the DMM in a separate configured directory, verify hashes, call Meridian-MCP parse/map/diagnostics, then invoke only the configured fixed PowerShell acceptance entry point.
-- [ ] Never invoke a shell command received from a client. Build arguments are fixed and repository-owned.
-- [ ] Require explicit user approval before applying a verified staged map into Meridian-Rift. Preserve unrelated dirty changes and hand off authentication/PR operations to GitHub Desktop.
-- [ ] Run tests with fake adapters, then a real staging-only integration against Meridian-Rift without applying the artifact.
+- [x] Run stage/verify tests and confirm failure.
+- [x] Resolve repository and target IDs through immutable trusted configuration, canonicalize once, and enforce containment.
+- [x] Stage the DMM in a separate configured directory, verify hashes, call Meridian-MCP parse/map/diagnostics, then invoke only the configured fixed PowerShell acceptance entry point.
+- [x] Never invoke a shell command received from a client. Build arguments are fixed and repository-owned.
+- [x] Require explicit user approval before applying a verified staged map into Meridian-Rift. Preserve unrelated dirty changes and hand off authentication/PR operations to GitHub Desktop.
+- [x] Run tests with fake adapters, then a real staging-only integration against Meridian-Rift without applying the artifact.
 - [ ] If authorized, commit with `feat(integration): stage and verify Meridian-Rift map output`.
 
 ### Task 7: Add cross-repository acceptance orchestration
@@ -187,20 +187,19 @@ type Verifier interface {
 - Create: `docs/integration/meridian-stack.md`
 - Modify after approval: `.github/workflows/ci.yml`
 
-- [ ] Obtain explicit approval before creating a new authoritative integration wrapper or changing CI; explain that the wrapper delegates to existing repository-owned gates and does not replace them.
-- [ ] Implement a PowerShell orchestrator with explicit repository roots, no network by default, bounded timeouts, `$LASTEXITCODE` checks, process-tree cleanup, and JSON evidence output.
-- [ ] Run in order: AphelionDMM contract/tests/build, installed Meridian-MCP conformance, Content Tools backend/frontend/launcher gates, staged map creation, MCP parse/diagnostics, and Meridian-Rift's approved acceptance entry point.
-- [ ] Keep each repository's result separate in the evidence; do not report partial success as stack acceptance.
-- [ ] Add a CI job only where credentials and heavyweight BYOND/tool dependencies can be provided safely; keep unavailable integration gates explicit.
-- [ ] Exercise the real local entry points from a clean compatible test checkout and retain the manifest/hashes/log markers.
+- [x] Obtain explicit approval before creating a new authoritative integration wrapper or changing CI; explain that the wrapper delegates to existing repository-owned gates and does not replace them.
+- [x] Implement a PowerShell orchestrator with explicit repository roots, no network by default, bounded timeouts, `$LASTEXITCODE` checks, process-tree cleanup, and JSON evidence output.
+- [x] Run in order: AphelionDMM contract/tests/build, installed Meridian-MCP conformance, Content Tools backend/frontend/launcher gates, staged map creation, MCP parse/diagnostics, and Meridian-Rift's approved acceptance entry point.
+- [x] Keep each repository's result separate in the evidence; do not report partial success as stack acceptance.
+- [x] Add a CI job only where credentials and heavyweight BYOND/tool dependencies can be provided safely; keep unavailable integration gates explicit.
+- [x] Exercise the real local entry points from a clean compatible test checkout and retain the manifest/hashes/log markers.
 - [ ] If authorized, commit with `test(integration): verify the Aphelion mapping toolchain`.
 
 ## Phase acceptance
 
-- [ ] Cross-repository manifests reject identity, revision, protocol, environment, and hash mismatch.
-- [ ] Meridian-MCP is always parsed first and remains a bounded diagnostic sidecar.
-- [ ] Content Tools browser code contains no collaboration or repository credentials.
-- [ ] Content Tools feedback follows Parsec/accessibility policy without modifying creative assets.
-- [ ] Meridian-Rift receives only staged, contained DMM output and retains authoritative build acceptance.
-- [ ] The full real-entry-point evidence distinguishes every repository gate.
-
+- [x] Cross-repository manifests reject identity, revision, protocol, environment, and hash mismatch.
+- [x] Meridian-MCP is always parsed first and remains a bounded diagnostic sidecar.
+- [x] Content Tools browser code contains no collaboration or repository credentials.
+- [x] Content Tools feedback follows Parsec/accessibility policy without modifying creative assets.
+- [x] Meridian-Rift receives only staged, contained DMM output and retains authoritative build acceptance.
+- [x] The full real-entry-point evidence distinguishes every repository gate.

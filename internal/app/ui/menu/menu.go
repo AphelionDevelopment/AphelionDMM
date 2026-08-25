@@ -32,6 +32,7 @@ type app interface {
 	DoExit()
 	// APHELION EDIT ADDITION START - COLLABORATION
 	DoCreateLocalCollaborationSession()
+	DoJoinCollaborationSession()
 	DoLeaveCollaborationSession()
 	DoOpenCollaborationPanel()
 	// APHELION EDIT ADDITION END
@@ -213,6 +214,9 @@ func (m *Menu) Process() {
 			w.MenuItem("Show Session Panel", m.app.DoOpenCollaborationPanel).
 				IconEmpty(),
 			w.MenuItem("Start Local Session", m.app.DoCreateLocalCollaborationSession).
+				IconEmpty().
+				Enabled(m.app.HasActiveMap() && !m.app.HasActiveCollaboration()),
+			w.MenuItem("Join Session", m.app.DoJoinCollaborationSession).
 				IconEmpty().
 				Enabled(m.app.HasActiveMap() && !m.app.HasActiveCollaboration()),
 			w.MenuItem("Leave Session", m.app.DoLeaveCollaborationSession).

@@ -39,32 +39,34 @@ type SessionClient struct {
 	config SessionClientConfig
 	http   *http.Client
 
-	mutex               sync.Mutex
-	joining             bool
-	transport           sessionTransport
-	network             *collabclient.NetworkExecutor
-	machine             *collabclient.StateMachine
-	sessionID           string
-	role                string
-	revision            model.Revision
-	participants        map[model.ActorID]ObservedPresence
-	presenceInterval    time.Duration
-	presenceSequence    uint64
-	nextPresenceAt      time.Time
-	pendingPresence     *protocol.PresenceUpdatePayload
-	cancelPresence      func()
-	presenceGeneration  uint64
-	resumptionToken     string
-	resumptionExpiresAt time.Time
-	baseURL             string
-	origin              string
-	documentID          model.DocumentID
-	actorID             model.ActorID
-	cancelReconnect     context.CancelFunc
-	reconnectContext    context.Context
-	reconnecting        bool
-	newTransport        func() SessionTransport
-	lastErr             error
+	mutex                   sync.Mutex
+	joining                 bool
+	transport               sessionTransport
+	network                 *collabclient.NetworkExecutor
+	machine                 *collabclient.StateMachine
+	sessionID               string
+	role                    string
+	revision                model.Revision
+	participants            map[model.ActorID]ObservedPresence
+	presenceInterval        time.Duration
+	presenceSequence        uint64
+	nextPresenceAt          time.Time
+	pendingPresence         *protocol.PresenceUpdatePayload
+	cancelPresence          func()
+	presenceGeneration      uint64
+	resumptionToken         string
+	resumptionExpiresAt     time.Time
+	administrationToken     string
+	administrationExpiresAt time.Time
+	baseURL                 string
+	origin                  string
+	documentID              model.DocumentID
+	actorID                 model.ActorID
+	cancelReconnect         context.CancelFunc
+	reconnectContext        context.Context
+	reconnecting            bool
+	newTransport            func() SessionTransport
+	lastErr                 error
 }
 
 // SessionTransport is a collaboration transport whose terminal result can be observed by the session lifecycle.
@@ -133,7 +135,7 @@ func (client *SessionClient) Create(ctx context.Context, baseURL, launchToken st
 	if created.SessionID == "" || created.OwnerToken == "" || created.DocumentID != snapshot.DocumentID {
 		return Invitation{}, fmt.Errorf("collaboration session response is incompatible with the requested document")
 	}
-	return Invitation{BaseURL: strings.TrimRight(baseURL, "/"), Origin: strings.TrimRight(baseURL, "/"), SessionID: created.SessionID, Token: created.OwnerToken}, nil
+	return Invitation{BaseURL: strings.TrimRight(baseURL, "/"), Origin: strings.TrimRight(baseURL, "/"), SessionID: created.SessionID, Token: created.OwnerToken, TokenExpiresAt: created.OwnerTokenExpiresAt}, nil
 }
 
 func (client *SessionClient) Join(ctx context.Context, invitation Invitation) error {
@@ -160,6 +162,8 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 	client.nextPresenceAt = time.Time{}
 	client.resumptionToken = ""
 	client.resumptionExpiresAt = time.Time{}
+	client.administrationToken = ""
+	client.administrationExpiresAt = time.Time{}
 	client.lastErr = nil
 	client.reconnecting = false
 	if client.cancelReconnect != nil {
@@ -248,6 +252,7 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 			client.recordPresenceUpdate(decoded.Payload.(*protocol.ServerPresenceUpdatePayload))
 		}
 	}
+	administrationToken := invitation.Token
 	if err := transport.Connect(ctx, protocol.JoinRequest{BaseURL: invitation.BaseURL, Origin: invitation.Origin, Token: invitation.Token, SessionID: invitation.SessionID, AcknowledgedRevision: snapshot.Revision}, receive); err != nil {
 		client.recordConnectionFailure(machine, err)
 		return err
@@ -276,6 +281,10 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 	client.transport = transport
 	client.network = joinedNetwork
 	client.joining = false
+	if client.role == "owner" {
+		client.administrationToken = administrationToken
+		client.administrationExpiresAt = invitation.TokenExpiresAt
+	}
 	client.mutex.Unlock()
 	client.recordSynchronized(machine, synchronizedRevision)
 	joined = true
@@ -298,6 +307,8 @@ func (client *SessionClient) Leave(context.Context) error {
 	client.nextPresenceAt = time.Time{}
 	client.resumptionToken = ""
 	client.resumptionExpiresAt = time.Time{}
+	client.administrationToken = ""
+	client.administrationExpiresAt = time.Time{}
 	client.baseURL = ""
 	client.origin = ""
 	client.documentID = ""
@@ -338,6 +349,68 @@ func (client *SessionClient) CollaborationExecutor() executor.Executor {
 	client.mutex.Lock()
 	defer client.mutex.Unlock()
 	return client.network
+}
+
+// CreateInvitation mints a short-lived single-use credential for an active owner session.
+func (client *SessionClient) CreateInvitation(ctx context.Context, role InvitationRole, displayName string) (Invitation, error) {
+	if role != InvitationRoleEditor && role != InvitationRoleViewer {
+		return Invitation{}, fmt.Errorf("collaboration invitation role is invalid")
+	}
+	if displayName == "" || len(displayName) > 128 {
+		return Invitation{}, fmt.Errorf("collaboration invitation display name is invalid")
+	}
+	client.mutex.Lock()
+	baseURL := client.baseURL
+	origin := client.origin
+	sessionID := client.sessionID
+	token := client.administrationToken
+	tokenExpiresAt := client.administrationExpiresAt
+	machine := client.machine
+	active := client.transport != nil && client.role == "owner" && (tokenExpiresAt.IsZero() || client.config.Now().Before(tokenExpiresAt))
+	client.mutex.Unlock()
+	if !active || baseURL == "" || origin == "" || sessionID == "" || token == "" {
+		return Invitation{}, fmt.Errorf("collaboration invitation is unavailable")
+	}
+	body, err := json.Marshal(map[string]string{"role": string(role), "display_name": displayName})
+	if err != nil {
+		return Invitation{}, err
+	}
+	request, err := client.request(ctx, http.MethodPost, baseURL+"/v1/sessions/"+url.PathEscape(sessionID)+"/join-tokens", token, bytes.NewReader(body))
+	if err != nil {
+		return Invitation{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.http.Do(request)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("create collaboration invitation: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		return Invitation{}, fmt.Errorf("create collaboration invitation returned HTTP %d", response.StatusCode)
+	}
+	var created struct {
+		Token     string        `json:"token"`
+		ActorID   model.ActorID `json:"actor_id"`
+		Role      string        `json:"role"`
+		ExpiresAt time.Time     `json:"expires_at"`
+	}
+	if err := decodeLimited(response.Body, &created); err != nil {
+		return Invitation{}, fmt.Errorf("decode collaboration invitation: %w", err)
+	}
+	if created.Token == "" || created.ActorID == "" || created.Role != string(role) || !client.config.Now().Before(created.ExpiresAt) {
+		return Invitation{}, fmt.Errorf("collaboration invitation response is incompatible with the request")
+	}
+	client.mutex.Lock()
+	stillCurrent := client.machine == machine && client.transport != nil && client.sessionID == sessionID && client.administrationToken == token
+	client.mutex.Unlock()
+	if !stillCurrent {
+		return Invitation{}, ErrSessionChanged
+	}
+	invitation := Invitation{BaseURL: baseURL, Origin: origin, SessionID: sessionID, Token: created.Token, TokenExpiresAt: created.ExpiresAt}
+	if err := invitation.validate(); err != nil {
+		return Invitation{}, err
+	}
+	return invitation, nil
 }
 
 func (client *SessionClient) RefreshConflict(ctx context.Context, operationID model.OperationID) (model.Snapshot, error) {
@@ -412,8 +485,12 @@ func (client *SessionClient) Status() SessionStatus {
 	client.mutex.Lock()
 	machine := client.machine
 	status := SessionStatus{SessionID: client.sessionID, Role: client.role, Revision: client.revision, Err: client.lastErr}
+	status.InviteReady = client.transport != nil && client.role == "owner" && client.administrationToken != "" && (client.administrationExpiresAt.IsZero() || client.config.Now().Before(client.administrationExpiresAt))
+	if client.administrationToken != "" {
+		status.SensitiveValues = append(status.SensitiveValues, client.administrationToken)
+	}
 	if client.resumptionToken != "" {
-		status.SensitiveValues = []string{client.resumptionToken}
+		status.SensitiveValues = append(status.SensitiveValues, client.resumptionToken)
 		status.ReconnectReady = !client.reconnecting && client.config.Now().Before(client.resumptionExpiresAt)
 	}
 	status.Participants = make([]protocol.ParticipantPresence, 0, len(client.participants))

@@ -6,14 +6,87 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"sdmm/internal/aphelion/collab/auth"
+	"sdmm/internal/aphelion/collab/compat"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
 )
+
+func TestHostedWebSocketReauthorizesSessionAndClosesRevokedCredential(t *testing.T) {
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer := &fakeHostedAuthorizer{session: auth.Session{
+		ActorID: actorID, Issuer: "https://issuer.example", Subject: "subject", DisplayName: "Hosted Mapper", Role: auth.RoleEditor, ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{
+		AllowedOrigins: []string{"http://127.0.0.1"}, HostedAuth: authorizer, HostedReauthorizationInterval: 10 * time.Millisecond,
+	})
+	websocketURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/v1/collaboration"
+	connection, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer hosted-token"}, "Origin": []string{"http://127.0.0.1"}}, Subprotocols: []string{WebSocketSubprotocol},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeClientEnvelope(t, connection, protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "hosted-join", SessionID: created.SessionID, Type: protocol.ClientJoin}, protocol.JoinPayload{JoinToken: "hosted-token"})
+	joined := readServerEnvelope(t, connection)
+	if joined.Envelope.Type != protocol.ServerJoined || joined.Payload.(*protocol.JoinedPayload).Role != string(RoleEditor) {
+		t.Fatalf("joined = %#v", joined)
+	}
+	_ = readServerEnvelopeType(t, connection, protocol.ServerReplayComplete)
+	_ = readServerEnvelopeType(t, connection, protocol.ServerPresenceSnapshot)
+	authorizer.revoked.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, _, err = connection.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("revoked close status = %d from %v", websocket.CloseStatus(err), err)
+	}
+}
+
+type fakeHostedAuthorizer struct {
+	mutex   sync.RWMutex
+	session auth.Session
+	revoked atomic.Bool
+}
+
+func (authorizer *fakeHostedAuthorizer) Authorize(context.Context, string) (auth.Session, error) {
+	if authorizer.revoked.Load() {
+		return auth.Session{}, auth.ErrInvalidSession
+	}
+	authorizer.mutex.RLock()
+	defer authorizer.mutex.RUnlock()
+	return authorizer.session, nil
+}
+
+func (authorizer *fakeHostedAuthorizer) AuthorizeSession(context.Context, string, string) (auth.Session, error) {
+	return authorizer.Authorize(context.Background(), "")
+}
+
+func (authorizer *fakeHostedAuthorizer) setRole(role auth.Role) {
+	authorizer.mutex.Lock()
+	authorizer.session.Role = role
+	authorizer.mutex.Unlock()
+}
+
+func TestJoinCompatibilityRejectsUnsupportedCompiledProtocol(t *testing.T) {
+	service := NewService(ServiceConfig{Compatibility: compat.Matrix{Releases: []compat.Release{{
+		Name: compat.CurrentRelease, ProtocolVersions: []uint16{model.ProtocolVersion + 1}, SchemaVersions: []uint16{model.SchemaVersion},
+	}}}})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	if err := service.validateJoinCompatibility(testSnapshot(t, 1)); err == nil {
+		t.Fatal("validateJoinCompatibility() error = nil")
+	}
+}
 
 func TestWebSocketRejectsOriginAndNegotiatesProtocol(t *testing.T) {
 	t.Parallel()

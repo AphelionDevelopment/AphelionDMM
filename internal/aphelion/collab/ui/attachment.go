@@ -19,6 +19,11 @@ type LocalSessionLifecycle interface {
 	Leave(context.Context) error
 }
 
+type JoinedSessionLifecycle interface {
+	Join(context.Context, Invitation) error
+	Leave(context.Context) error
+}
+
 type CollaborationExecutorProvider interface {
 	CollaborationExecutor() executor.Executor
 }
@@ -43,6 +48,24 @@ func PrepareLocalSession(ctx context.Context, lifecycle LocalSessionLifecycle, p
 	defer cancelCleanup()
 	cleanupErr := lifecycle.Leave(cleanupContext)
 	return nil, errors.Join(fmt.Errorf("prepare local collaboration session: synchronized executor is unavailable"), cleanupErr)
+}
+
+// PrepareJoinedSession joins a session and returns its synchronized executor for UI-thread attachment.
+func PrepareJoinedSession(ctx context.Context, lifecycle JoinedSessionLifecycle, provider CollaborationExecutorProvider, invitation Invitation) (executor.Executor, error) {
+	if lifecycle == nil || provider == nil {
+		return nil, fmt.Errorf("prepare joined collaboration session: lifecycle is unavailable")
+	}
+	if err := lifecycle.Join(ctx, invitation); err != nil {
+		return nil, err
+	}
+	execution := provider.CollaborationExecutor()
+	if execution != nil {
+		return execution, nil
+	}
+	cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), incompleteSessionCleanupTimeout)
+	defer cancelCleanup()
+	cleanupErr := lifecycle.Leave(cleanupContext)
+	return nil, errors.Join(fmt.Errorf("prepare joined collaboration session: synchronized executor is unavailable"), cleanupErr)
 }
 
 // AttachPreparedSession installs a synchronized executor only if the originating editor is still current.

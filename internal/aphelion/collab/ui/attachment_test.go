@@ -41,6 +41,32 @@ func TestPrepareLocalSessionLeavesIncompleteSession(t *testing.T) {
 	}
 }
 
+func TestPrepareJoinedSessionReturnsExecutorAndCleansUpIncompleteJoin(t *testing.T) {
+	t.Parallel()
+
+	execution := attachmentExecutor(t, controllerSnapshot(t))
+	session := &fakeJoinedSession{}
+	prepared, err := PrepareJoinedSession(context.Background(), session, fakeExecutorProvider{execution: execution}, Invitation{
+		BaseURL: "http://127.0.0.1:1234", Origin: "http://127.0.0.1:1234", SessionID: "session", Token: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared != execution || !session.joined || session.leaveCalls != 0 {
+		t.Fatalf("prepared join = %#v, joined %t, leaves %d", prepared, session.joined, session.leaveCalls)
+	}
+
+	incomplete := &fakeJoinedSession{}
+	if _, err := PrepareJoinedSession(context.Background(), incomplete, fakeExecutorProvider{}, Invitation{
+		BaseURL: "http://127.0.0.1:1234", Origin: "http://127.0.0.1:1234", SessionID: "session", Token: "secret",
+	}); err == nil {
+		t.Fatal("joined session accepted a missing executor")
+	}
+	if incomplete.leaveCalls != 1 {
+		t.Fatalf("incomplete join leave calls = %d, want 1", incomplete.leaveCalls)
+	}
+}
+
 func TestAttachPreparedSessionRefusesChangedTarget(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +107,21 @@ type fakeLocalSession struct {
 	created    bool
 	snapshot   model.Snapshot
 	leaveCalls int
+}
+
+type fakeJoinedSession struct {
+	joined     bool
+	leaveCalls int
+}
+
+func (session *fakeJoinedSession) Join(context.Context, Invitation) error {
+	session.joined = true
+	return nil
+}
+
+func (session *fakeJoinedSession) Leave(context.Context) error {
+	session.leaveCalls++
+	return nil
 }
 
 func (session *fakeLocalSession) CreateLocal(_ context.Context, snapshot model.Snapshot) error {

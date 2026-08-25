@@ -129,6 +129,39 @@ jobs:
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeServer$' -fuzztime=5s
 
+  toolset-integration-contracts:
+    name: Toolset Integration Contracts
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+
+      - name: Manifest, staging, and adapter contracts
+        shell: pwsh
+        run: go test ./internal/aphelion/integration/... -count=1
+
+      - name: Record unavailable external integration gates
+        shell: pwsh
+        run: |
+          & ./scripts/integration/verify-aphelion-stack.ps1 `
+            -AphelionRoot $PWD.Path `
+            -EvidencePath (Join-Path $env:RUNNER_TEMP 'aphelion-stack-plan.json') `
+            -PlanOnly
+
+      - name: Upload integration availability evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: toolset-integration-availability
+          path: ${{ runner.temp }}/aphelion-stack-plan.json
+          if-no-files-found: error
+
   release:
     name: Release
     runs-on: ubuntu-latest

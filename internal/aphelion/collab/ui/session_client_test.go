@@ -186,6 +186,56 @@ func TestSessionClientReportsConnectionLoss(t *testing.T) {
 	t.Fatalf("state after connection loss = %q, want reconnecting", client.Status().State)
 }
 
+func TestSessionClientCreatesScopedInvitationOnlyForActiveOwner(t *testing.T) {
+	t.Parallel()
+
+	snapshot := controllerSnapshot(t)
+	embedded, err := server.StartEmbedded(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = embedded.Shutdown(context.Background()) })
+	client := NewSessionClient(SessionClientConfig{HTTPTimeout: time.Second})
+	invitation, err := client.Create(context.Background(), embedded.Endpoint(), embedded.TakeLaunchToken(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Join(context.Background(), invitation); err != nil {
+		t.Fatal(err)
+	}
+	if !client.Status().InviteReady {
+		t.Fatal("owner session did not expose invitation capability")
+	}
+	created, err := client.CreateInvitation(context.Background(), InvitationRoleEditor, "Second Mapper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.BaseURL != embedded.Endpoint() || created.Origin != embedded.Endpoint() || created.SessionID != invitation.SessionID || created.Token == "" {
+		t.Fatalf("created invitation = %#v", created)
+	}
+	second := NewSessionClient(SessionClientConfig{HTTPTimeout: time.Second})
+	if err := second.Join(context.Background(), created); err != nil {
+		t.Fatalf("second client join: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Leave(context.Background()) })
+	if status := second.Status(); status.Role != "editor" || status.SessionID != invitation.SessionID || status.State != collabclient.StateCaughtUp {
+		t.Fatalf("second client status = %#v", status)
+	}
+	reused := NewSessionClient(SessionClientConfig{HTTPTimeout: time.Second})
+	if err := reused.Join(context.Background(), created); err == nil {
+		t.Fatal("single-use invitation joined a second time")
+	}
+	if err := client.Leave(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.Status().InviteReady {
+		t.Fatal("leave retained invitation capability")
+	}
+	if _, err := client.CreateInvitation(context.Background(), InvitationRoleEditor, "Late Mapper"); err == nil {
+		t.Fatal("inactive client minted an invitation")
+	}
+}
+
 func TestSessionClientReconnectsWithRotatedCredential(t *testing.T) {
 	t.Parallel()
 
@@ -611,12 +661,13 @@ func TestSessionClientJoinContextDoesNotOwnEstablishedConnection(t *testing.T) {
 	client.mutex.Lock()
 	resumptionToken := client.resumptionToken
 	resumptionExpiresAt := client.resumptionExpiresAt
+	administrationToken := client.administrationToken
 	client.mutex.Unlock()
-	if resumptionToken == "" || resumptionToken == invitation.Token || !resumptionExpiresAt.After(time.Now()) {
+	if resumptionToken == "" || resumptionToken == invitation.Token || administrationToken != invitation.Token || !resumptionExpiresAt.After(time.Now()) {
 		t.Fatalf("resumption credential = token present %t, rotated %t, expiry %v", resumptionToken != "", resumptionToken != invitation.Token, resumptionExpiresAt)
 	}
 	status := client.Status()
-	if !status.ReconnectReady || len(status.SensitiveValues) != 1 || status.SensitiveValues[0] != resumptionToken {
+	if !status.ReconnectReady || len(status.SensitiveValues) != 2 || status.SensitiveValues[0] != administrationToken || status.SensitiveValues[1] != resumptionToken {
 		t.Fatalf("credential status = reconnect ready %t, sensitive values %d", status.ReconnectReady, len(status.SensitiveValues))
 	}
 	cancelJoin()
@@ -632,8 +683,8 @@ func TestSessionClientJoinContextDoesNotOwnEstablishedConnection(t *testing.T) {
 	}
 	client.mutex.Lock()
 	defer client.mutex.Unlock()
-	if client.resumptionToken != "" || !client.resumptionExpiresAt.IsZero() {
-		t.Fatal("leave retained the resumption credential")
+	if client.resumptionToken != "" || client.administrationToken != "" || !client.resumptionExpiresAt.IsZero() {
+		t.Fatal("leave retained a collaboration credential")
 	}
 }
 

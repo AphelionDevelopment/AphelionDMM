@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aphelion.dev/schemas/integration/aphelion-manifest-v1.json",
+  "title": "Aphelion integration manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository_identity",
+    "repository_revision",
+    "dme_identifier",
+    "map_target_id",
+    "protocol_version",
+    "environment_sha256",
+    "input_map_sha256",
+    "output_map_sha256",
+    "accepted_revision",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "repository_identity": { "$ref": "#/$defs/logicalIdentifier" },
+    "repository_revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "dme_identifier": { "$ref": "#/$defs/logicalIdentifier" },
+    "map_target_id": { "$ref": "#/$defs/logicalIdentifier" },
+    "protocol_version": { "type": "integer", "const": 1 },
+    "environment_sha256": { "$ref": "#/$defs/sha256" },
+    "input_map_sha256": { "$ref": "#/$defs/sha256" },
+    "output_map_sha256": { "$ref": "#/$defs/sha256" },
+    "accepted_revision": { "type": "integer", "minimum": 0 },
+    "content_manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    }
+  },
+  "$defs": {
+    "logicalIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]|/(?:[A-Za-z0-9._-]+))*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

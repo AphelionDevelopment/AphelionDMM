@@ -27,3 +27,6 @@ logs/
 
 # Build destination folder
 dst/
+
+# Local cross-repository acceptance evidence
+.artifacts/

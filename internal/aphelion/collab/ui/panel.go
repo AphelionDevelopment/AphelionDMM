@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/app/ui/component"
@@ -22,17 +23,20 @@ type PanelApp interface {
 	HasActiveCollaboration() bool
 	DoLeaveCollaborationSession()
 	DoRetryCollaborationSession()
+	DoCopyCollaborationInvitation(InvitationRole, string)
 	DoResolveCollaborationConflict(model.OperationID, ConflictAction)
 }
 
 type Panel struct {
 	component.Component
 
-	app PanelApp
+	app         PanelApp
+	inviteeName string
 }
 
 func (panel *Panel) Init(app PanelApp) {
 	panel.app = app
+	panel.inviteeName = "Collaborator"
 }
 
 func (panel *Panel) Process(int32) {
@@ -65,6 +69,20 @@ func (panel *Panel) Process(int32) {
 			label += " - " + participant.Status
 		}
 		imgui.BulletText(label)
+	}
+
+	if view.CanAdminister {
+		imgui.Separator()
+		imgui.Text("Invite a participant")
+		w.InputTextWithHint("##collaboration-invitee-name", "Display name", &panel.inviteeName).Width(-1).Build()
+		inviteDisabled := !view.CanCopyInvite || strings.TrimSpace(panel.inviteeName) == ""
+		w.Disabled(inviteDisabled, w.Button("Copy Editor Invite", func() {
+			panel.app.DoCopyCollaborationInvitation(InvitationRoleEditor, strings.TrimSpace(panel.inviteeName))
+		})).Build()
+		w.Disabled(inviteDisabled, w.Button("Copy Viewer Invite", func() {
+			panel.app.DoCopyCollaborationInvitation(InvitationRoleViewer, strings.TrimSpace(panel.inviteeName))
+		})).Build()
+		imgui.TextWrapped("Invites are short-lived and can be used once.")
 	}
 
 	if len(view.ConflictSummaries) != 0 || view.HiddenConflictCount != 0 {

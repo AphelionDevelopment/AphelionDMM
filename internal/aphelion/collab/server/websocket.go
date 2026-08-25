@@ -36,6 +36,16 @@ func (service *Service) handleWebSocket(writer http.ResponseWriter, request *htt
 	tokenValue := bearerToken(request)
 	auth, authenticated := service.tokens[tokenValue]
 	service.mutex.RUnlock()
+	if (!authenticated || auth.launch || auth.webSocketRedeemed || !service.config.Now().Before(auth.expiresAt)) && service.config.HostedAuth != nil {
+		hostedSession, err := service.config.HostedAuth.Authorize(request.Context(), tokenValue)
+		if err == nil {
+			principal, principalErr := principalFromHosted(hostedSession)
+			if principalErr == nil {
+				auth = tokenRecord{hosted: true, hostedCredential: tokenValue, principal: principal, expiresAt: hostedSession.ExpiresAt}
+				authenticated = true
+			}
+		}
+	}
 	if !authenticated || auth.launch || auth.webSocketRedeemed || !service.config.Now().Before(auth.expiresAt) {
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "session token is invalid")
 		return
@@ -93,7 +103,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 		return fmt.Errorf("read join: %w", err)
 	}
 	decoded, err := protocol.DecodeClient(data)
-	if err != nil || decoded.Envelope.Type != protocol.ClientJoin || decoded.Envelope.SessionID != auth.sessionID {
+	if err != nil || decoded.Envelope.Type != protocol.ClientJoin || (!auth.hosted && decoded.Envelope.SessionID != auth.sessionID) {
 		_ = connection.Close(websocket.StatusPolicyViolation, "valid join required")
 		return fmt.Errorf("validate join envelope: %w", err)
 	}
@@ -101,6 +111,13 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 	if join.JoinToken != tokenValue {
 		_ = connection.Close(websocket.StatusPolicyViolation, "join token mismatch")
 		return fmt.Errorf("validate join token: mismatch")
+	}
+	if auth.hosted {
+		auth, err = service.reauthorizeHosted(parent, auth.hostedCredential, decoded.Envelope.SessionID)
+		if err != nil {
+			_ = connection.Close(websocket.StatusPolicyViolation, "session authorization unavailable")
+			return fmt.Errorf("authorize hosted session join: %w", err)
+		}
 	}
 
 	service.mutex.RLock()
@@ -125,14 +142,21 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 	if err != nil {
 		return fmt.Errorf("load joined snapshot: %w", err)
 	}
+	if err := service.validateJoinCompatibility(snapshot); err != nil {
+		_ = connection.Close(websocket.StatusPolicyViolation, "unsupported collaboration version")
+		return fmt.Errorf("negotiate joined version: %w", err)
+	}
 	mapHash, err := snapshot.Hash()
 	if err != nil {
 		return fmt.Errorf("hash joined snapshot: %w", err)
 	}
-	resumptionToken, resumptionTokenExpiresAt, err := service.rotateResumptionToken(tokenValue, auth.sessionID, auth.principal)
-	if err != nil {
-		_ = connection.Close(websocket.StatusPolicyViolation, "session credential unavailable")
-		return fmt.Errorf("rotate resumption credential: %w", err)
+	resumptionToken, resumptionTokenExpiresAt := auth.hostedCredential, auth.expiresAt
+	if !auth.hosted {
+		resumptionToken, resumptionTokenExpiresAt, err = service.rotateResumptionToken(tokenValue, auth.sessionID, auth.principal)
+		if err != nil {
+			_ = connection.Close(websocket.StatusPolicyViolation, "session credential unavailable")
+			return fmt.Errorf("rotate resumption credential: %w", err)
+		}
 	}
 	if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{
 		ProtocolVersion: model.ProtocolVersion,
@@ -205,6 +229,13 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 	incoming := make(chan protocol.DecodedClient)
 	readErrors := make(chan error, 1)
 	go readClientMessages(parent, connection, auth.sessionID, incoming, readErrors)
+	var reauthorization <-chan time.Time
+	var reauthorizationTicker *time.Ticker
+	if auth.hosted {
+		reauthorizationTicker = time.NewTicker(service.config.HostedReauthorizationInterval)
+		defer reauthorizationTicker.Stop()
+		reauthorization = reauthorizationTicker.C
+	}
 	for {
 		select {
 		case <-parent.Done():
@@ -214,6 +245,12 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 				return nil
 			}
 			return fmt.Errorf("read client message: %w", err)
+		case <-reauthorization:
+			auth, err = service.reauthorizeHosted(parent, auth.hostedCredential, auth.sessionID)
+			if err != nil {
+				_ = connection.Close(websocket.StatusPolicyViolation, "session authorization revoked")
+				return fmt.Errorf("reauthorize hosted connection: %w", err)
+			}
 		case accepted, open := <-durable:
 			if !open {
 				_ = connection.Close(CloseSlowConsumer, "durable consumer fell behind")
@@ -238,11 +275,23 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 				return fmt.Errorf("write presence update: %w", err)
 			}
 		case message := <-incoming:
+			if auth.hosted {
+				auth, err = service.reauthorizeHosted(parent, auth.hostedCredential, auth.sessionID)
+				if err != nil {
+					_ = connection.Close(websocket.StatusPolicyViolation, "session authorization revoked")
+					return fmt.Errorf("reauthorize hosted message: %w", err)
+				}
+			}
 			if err := service.handleClientMessage(parent, connection, session, auth, message); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (service *Service) validateJoinCompatibility(snapshot model.Snapshot) error {
+	_, err := service.compatibility.Negotiate(snapshot.ProtocolVersion, snapshot.SchemaVersion)
+	return err
 }
 
 func readClientMessages(ctx context.Context, connection *websocket.Conn, sessionID string, messages chan<- protocol.DecodedClient, readErrors chan<- error) {

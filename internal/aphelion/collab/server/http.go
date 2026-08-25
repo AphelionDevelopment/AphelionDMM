@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"sdmm/internal/aphelion/collab/auth"
+	"sdmm/internal/aphelion/collab/compat"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
 	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
@@ -24,20 +28,28 @@ const (
 )
 
 type ServiceConfig struct {
-	Store              SessionStore
-	Document           DocumentConfig
-	Limits             Limits
-	Telemetry          *collabtelemetry.Telemetry
-	AllowedOrigins     []string
-	Build              string
-	Revision           string
-	OnWebSocketError   func(error)
-	LaunchTokenTTL     time.Duration
-	JoinTokenTTL       time.Duration
-	ResumptionTokenTTL time.Duration
-	PresenceTimeout    time.Duration
-	PresenceInterval   time.Duration
-	Now                func() time.Time
+	Store                         SessionStore
+	Document                      DocumentConfig
+	Limits                        Limits
+	Telemetry                     *collabtelemetry.Telemetry
+	AllowedOrigins                []string
+	Build                         string
+	Revision                      string
+	OnWebSocketError              func(error)
+	LaunchTokenTTL                time.Duration
+	JoinTokenTTL                  time.Duration
+	ResumptionTokenTTL            time.Duration
+	PresenceTimeout               time.Duration
+	PresenceInterval              time.Duration
+	Now                           func() time.Time
+	Compatibility                 compat.Matrix
+	HostedAuth                    HostedSessionAuthorizer
+	HostedReauthorizationInterval time.Duration
+}
+
+type HostedSessionAuthorizer interface {
+	Authorize(context.Context, string) (auth.Session, error)
+	AuthorizeSession(context.Context, string, string) (auth.Session, error)
 }
 
 type CreateSessionResponse struct {
@@ -58,6 +70,8 @@ type tokenRecord struct {
 	expiresAt          time.Time
 	expectedDocumentID model.DocumentID
 	expectedMapHash    string
+	hosted             bool
+	hostedCredential   string
 }
 
 type sessionRecord struct {
@@ -81,6 +95,7 @@ type Service struct {
 	durableLimiter    *rateLimiter
 	presenceLimiter   *rateLimiter
 	telemetry         *collabtelemetry.Telemetry
+	compatibility     compat.Matrix
 	server            *http.ServeMux
 }
 
@@ -102,8 +117,14 @@ func NewService(config ServiceConfig) *Service {
 	if config.PresenceInterval < minimumPresenceInterval || config.PresenceInterval > maximumPresenceInterval {
 		config.PresenceInterval = 100 * time.Millisecond
 	}
+	if config.HostedReauthorizationInterval <= 0 {
+		config.HostedReauthorizationInterval = 30 * time.Second
+	}
 	if config.Now == nil {
 		config.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if len(config.Compatibility.Releases) == 0 {
+		config.Compatibility = compat.DefaultMatrix()
 	}
 	serviceContext, cancel := context.WithCancel(context.Background())
 	store := config.Store
@@ -126,6 +147,7 @@ func NewService(config ServiceConfig) *Service {
 		durableLimiter:  newRateLimiter(limits.DurableRate, limits.RateEntries),
 		presenceLimiter: newRateLimiter(limits.PresenceRate, limits.RateEntries),
 		telemetry:       config.Telemetry,
+		compatibility:   config.Compatibility,
 		tokens:          make(map[string]tokenRecord),
 		sessions:        make(map[string]sessionRecord),
 		recoveryErrors:  make(map[model.DocumentID]error),
@@ -257,7 +279,7 @@ func (service *Service) setDocumentRecoveryError(documentID model.DocumentID, er
 func (service *Service) handleVersion(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"build": service.config.Build, "revision": service.config.Revision,
-		"protocol_versions": []uint16{model.ProtocolVersion}, "schema_versions": []uint16{model.SchemaVersion},
+		"protocol_versions": []uint16{model.ProtocolVersion}, "schema_versions": []uint16{model.SchemaVersion}, "compatibility": service.compatibility,
 	})
 }
 
@@ -446,10 +468,47 @@ func (service *Service) authorize(request *http.Request, sessionID string) (Prin
 
 func (service *Service) authorizeRecord(request *http.Request, sessionID string) (tokenRecord, sessionRecord, bool) {
 	service.mutex.RLock()
-	defer service.mutex.RUnlock()
-	token, tokenExists := service.tokens[bearerToken(request)]
+	tokenValue := bearerToken(request)
+	token, tokenExists := service.tokens[tokenValue]
 	session, sessionExists := service.sessions[sessionID]
-	return token, session, tokenExists && !token.launch && token.sessionID == sessionID && sessionExists && service.config.Now().Before(token.expiresAt)
+	service.mutex.RUnlock()
+	if tokenExists && !token.launch && token.sessionID == sessionID && sessionExists && service.config.Now().Before(token.expiresAt) {
+		return token, session, true
+	}
+	if !sessionExists || service.config.HostedAuth == nil {
+		return tokenRecord{}, sessionRecord{}, false
+	}
+	hosted, err := service.reauthorizeHosted(request.Context(), tokenValue, sessionID)
+	if err != nil {
+		return tokenRecord{}, sessionRecord{}, false
+	}
+	return hosted, session, true
+}
+
+func (service *Service) reauthorizeHosted(ctx context.Context, credential, sessionID string) (tokenRecord, error) {
+	if credential == "" || service.config.HostedAuth == nil {
+		return tokenRecord{}, fmt.Errorf("hosted authentication is unavailable")
+	}
+	session, err := service.config.HostedAuth.AuthorizeSession(ctx, credential, sessionID)
+	if err != nil {
+		return tokenRecord{}, err
+	}
+	if !service.config.Now().Before(session.ExpiresAt) {
+		return tokenRecord{}, fmt.Errorf("hosted authentication session is expired")
+	}
+	principal, err := principalFromHosted(session)
+	if err != nil {
+		return tokenRecord{}, err
+	}
+	if err := service.hub.Join(sessionID, principal); err != nil {
+		return tokenRecord{}, err
+	}
+	return tokenRecord{hosted: true, hostedCredential: credential, sessionID: sessionID, principal: principal, expiresAt: session.ExpiresAt}, nil
+}
+
+func principalFromHosted(session auth.Session) (Principal, error) {
+	identityHash := sha256.Sum256([]byte(session.Issuer + "\x00" + session.Subject))
+	return NewPrincipal("oidc-"+hex.EncodeToString(identityHash[:]), session.ActorID, session.DisplayName, Role(session.Role))
 }
 
 func (service *Service) redeemLaunchToken(token string) bool {

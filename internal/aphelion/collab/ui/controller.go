@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"sdmm/internal/aphelion/collab/model"
 )
@@ -22,10 +23,11 @@ type ProjectReplacementPermit struct {
 }
 
 type Invitation struct {
-	BaseURL   string `json:"base_url"`
-	Origin    string `json:"origin"`
-	SessionID string `json:"session_id"`
-	Token     string `json:"-"`
+	BaseURL        string    `json:"base_url"`
+	Origin         string    `json:"origin"`
+	SessionID      string    `json:"session_id"`
+	Token          string    `json:"-"`
+	TokenExpiresAt time.Time `json:"-"`
 }
 
 func (invitation Invitation) String() string {

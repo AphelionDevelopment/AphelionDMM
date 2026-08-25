@@ -30,12 +30,12 @@
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] Write the shared store conformance suite against an isolated PostgreSQL test database and confirm failure for the absent implementation.
-- [ ] Add pinned `github.com/jackc/pgx/v5` modules after license/advisory review.
-- [ ] Implement transactionally contiguous revisions, unique operation IDs, snapshots, replay, and migration locks.
-- [ ] Use explicit statement timeouts, bounded pools, context cancellation, and serializable or row-locked document revision assignment.
-- [ ] Test concurrent submissions from multiple service instances, transaction abort, connection loss, retry classification, and migration contention.
-- [ ] Compare recovered snapshot/hash results with the SQLite implementation using the same fixtures.
+- [x] Write the shared store conformance suite against an isolated PostgreSQL test database and confirm failure for the absent implementation.
+- [x] Add pinned `github.com/jackc/pgx/v5` modules after license/advisory review.
+- [x] Implement transactionally contiguous revisions, unique operation IDs, snapshots, replay, and migration locks.
+- [x] Use explicit statement timeouts, bounded pools, context cancellation, and serializable or row-locked document revision assignment.
+- [x] Test concurrent submissions from multiple service instances, transaction abort, connection loss, retry classification, and migration contention.
+- [x] Compare recovered snapshot/hash results with the SQLite implementation using the same fixtures.
 - [ ] If authorized, commit with `feat(store): add PostgreSQL collaboration persistence`.
 
 ### Task 2: Add hosted OIDC authentication and role mapping
@@ -49,12 +49,12 @@
 - Modify: `go.mod`
 - Modify: `go.sum`
 
-- [ ] Write tests with a local signed OIDC issuer for discovery, issuer/audience/signature/expiry/nonce checks, PKCE state binding, key rotation, disabled user, role change, logout, and WebSocket token expiry.
-- [ ] Run auth tests and confirm failure.
-- [ ] Add pinned `github.com/coreos/go-oidc/v3` and OAuth2 dependencies.
-- [ ] Implement Authorization Code with PKCE in the trusted desktop/backend flow; never use an implicit flow or persist refresh tokens in map/project files.
-- [ ] Map immutable provider subject to internal principal/actor identity. Store display metadata separately.
-- [ ] Reauthorize session role on join and sensitive owner operations; close connections whose session authorization is revoked.
+- [x] Write tests with a local signed OIDC issuer for discovery, issuer/audience/signature/expiry/nonce checks, PKCE state binding, key rotation, disabled user, role change, logout, and WebSocket token expiry.
+- [x] Run auth tests and confirm failure.
+- [x] Add pinned `github.com/coreos/go-oidc/v3` and OAuth2 dependencies.
+- [x] Implement Authorization Code with PKCE in the trusted desktop/backend flow; never use an implicit flow or persist refresh tokens in map/project files.
+- [x] Map immutable provider subject to internal principal/actor identity. Store display metadata separately.
+- [x] Reauthorize session role on join and sensitive owner operations; close connections whose session authorization is revoked.
 - [ ] Run focused tests, race tests, and manual login/logout against a non-production test issuer.
 - [ ] If authorized, commit with `feat(auth): add hosted OIDC and session roles`.
 
@@ -68,9 +68,9 @@
 - Create: `internal/aphelion/collab/server/hosted_config_test.go`
 - Create after approval: `.dockerignore`
 
-- [ ] Write strict config tests for bind address, public origin, proxy trust, database DSN source, OIDC issuer/client ID, limits, telemetry endpoint, and secret-file permissions.
-- [ ] Run config tests and confirm failure.
-- [ ] Implement strict YAML decoding with unknown-field rejection and environment indirection only for named secrets.
+- [x] Write strict config tests for bind address, public origin, proxy trust, database DSN source, OIDC issuer/client ID, limits, telemetry endpoint, and secret-file permissions.
+- [x] Run config tests and confirm failure.
+- [x] Implement strict YAML decoding with unknown-field rejection and environment indirection only for named secrets.
 - [ ] Present exact deployment files/effects and obtain protected-infrastructure approval.
 - [ ] Build a non-root, read-only-root-filesystem OCI image with a pinned base digest, health checks, no shell package manager at runtime, and a writable data/temp mount only where required.
 - [ ] Terminate TLS in a documented trusted reverse proxy or directly in the service; in either case validate forwarded headers only from configured proxy ranges.
@@ -85,12 +85,12 @@
 - Create after approval: `deploy/runbooks/migrations.md`
 - Create: `internal/aphelion/collab/store/postgres/restore_test.go`
 
-- [ ] Define recovery point and recovery time targets for the pilot: at most five minutes of unacknowledged exposure and a 60-minute service restoration target. Acknowledged operations remain governed by transaction durability.
-- [ ] Add an automated restore test that loads a logical backup into an empty database, starts the service, replays, and confirms document revisions/hashes.
-- [ ] Test restoration to a point before and after a known operation and record the expected visible revision.
+- [x] Define recovery point and recovery time targets for the pilot: at most five minutes of unacknowledged exposure and a 60-minute service restoration target. Acknowledged operations remain governed by transaction durability.
+- [x] Add an automated restore test that loads a logical backup into an empty database, opens the collaboration store, replays, and confirms document revisions/hashes. Full service startup is covered separately by the container fixture gate.
+- [x] Test restoration to a point before and after a known operation and record the expected visible revision.
 - [ ] Document pre-migration backup, migration lock, compatibility window, rollback/roll-forward decision, and integrity queries.
 - [ ] Ensure backup commands read secrets from the deployment secret mechanism and redact output.
-- [ ] Run a timed restore rehearsal and record actual duration/artifact hashes.
+- [x] Run a timed restore rehearsal and record actual duration/artifact hashes.
 - [ ] If authorized, commit with `ops: document and test collaboration recovery`.
 
 ### Task 5: Add protocol compatibility and rolling-upgrade gates
@@ -101,12 +101,12 @@
 - Create: `testdata/collaboration/compat/v1/*.json`
 - Create: `cmd/apheliondmm-compat/main.go`
 
-- [ ] Write tests for current/current, previous/current, current/previous, unsupported protocol, additive optional field, changed required semantics, and snapshot schema upgrade.
-- [ ] Run compatibility tests and confirm failure.
-- [ ] Implement an explicit matrix used by `/v1/version`, join negotiation, and the compatibility command.
-- [ ] Preserve golden accepted/rejected message fixtures and expected map hashes for every supported version.
+- [ ] Write tests for current/current, previous/current, current/previous, unsupported protocol, additive optional field, changed required semantics, and snapshot schema upgrade. Current-version, rolling-pair, rejection, and v1 fixture coverage is present; a real schema-upgrade fixture remains.
+- [x] Run compatibility tests and confirm failure.
+- [x] Implement an explicit matrix used by `/v1/version`, join negotiation, and the compatibility command.
+- [x] Preserve golden accepted/rejected message fixtures and expected map hashes for every supported version.
 - [ ] Start old/new service instances against the same PostgreSQL schema only when the matrix permits it; prove operation continuity during a rolling restart.
-- [ ] Make incompatible versions fail before session join or migration.
+- [x] Make incompatible versions fail before session join or migration.
 - [ ] If authorized, commit with `test(protocol): gate rolling compatibility`.
 
 ### Task 6: Build deterministic load and fault tooling
@@ -117,12 +117,12 @@
 - Create: `cmd/apheliondmm-loadtest/main.go`
 - Create: `testdata/collaboration/load/pilot.json`
 
-- [ ] Write tests for deterministic scenario generation from a recorded seed, bounded clients/operations/presence, expected final revision, and expected canonical hash.
-- [ ] Run load tests and confirm failure.
-- [ ] Implement a client that uses only public HTTP/WSS contracts and emits machine-readable latency/error/convergence results.
-- [ ] Define the pilot gate: 25 concurrent editors on one representative map, 10 durable operations per second aggregate, 20 presence updates per second per active editor before coalescing, zero acknowledged-operation loss, zero divergence, and p95 accepted-operation acknowledgement below 250 ms on the reference deployment.
+- [x] Write tests for deterministic scenario generation from a recorded seed, bounded clients/operations/presence, expected final revision, and expected canonical hash.
+- [x] Run load tests and confirm failure.
+- [x] Implement a client that uses only public HTTP/WSS contracts and emits machine-readable latency/error/convergence results.
+- [x] Define the pilot gate: 25 concurrent editors on one representative map, 10 durable operations per second aggregate, 20 presence updates per second per active editor before coalescing, zero acknowledged-operation loss, zero divergence, and p95 accepted-operation acknowledgement below 250 ms on the reference deployment.
 - [ ] Inject service restart, one database connection interruption, slow consumer, and presence flood; verify reconnect/recovery and final hash.
-- [ ] Keep generated load data neutral and structural; do not introduce authored map content.
+- [x] Keep generated load data neutral and structural; do not introduce authored map content.
 - [ ] If authorized, commit with `test(load): add deterministic hosted collaboration scenarios`.
 
 ### Task 7: Prepare security review and staged rollout
@@ -151,4 +151,3 @@
 - [ ] Supported rolling versions maintain contiguous revisions; incompatible versions fail before join.
 - [ ] Load/fault scenarios meet the stated pilot gate without acknowledged loss or divergence.
 - [ ] Security and rollback rehearsals pass before any deployment expansion.
-

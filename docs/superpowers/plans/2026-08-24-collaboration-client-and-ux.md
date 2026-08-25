@@ -130,7 +130,7 @@ func (c *Controller) Leave(ctx context.Context) error
 - [x] Write view-model tests for status labels, role capabilities, participant ordering, conflict summaries, copy-invite availability, and accessible error text.
 - [x] Run focused tests and confirm failure.
 - [x] Implement a pure `ViewModel` with no ImGui dependency.
-- [ ] Render an Aphelion-owned panel showing session name/ID, role, revision, sync state, participants, invite, leave, reconnect, and bounded conflict details.
+- [x] Render an Aphelion-owned panel showing session name/ID, role, revision, sync state, participants, invite, leave, reconnect, and bounded conflict details.
 - [x] Add marked layout/menu registration. Bump layout state only if required and document the resulting persisted-layout reset before editing.
 - [x] Use existing neutral UI styling and text. Do not add or alter assets.
 - [ ] Exercise keyboard access, status readability without color, narrow panel width, and screen-reader-compatible status logging where the desktop framework permits it.
@@ -169,7 +169,7 @@ func (c *Controller) Leave(ctx context.Context) error
 - [x] Implement bounded reconnect delays that stop on explicit leave, authentication denial, or incompatible protocol.
 - [x] Present conflict values and actions: refresh authoritative state, discard local edit, or rebuild a new operation from current state. Never offer force overwrite as ordinary conflict resolution.
 - [x] Adapt desktop undo/redo actions to call actor inverse/forward operations when collaboration is active; move history only after acknowledgement and preserve synchronous local command behavior.
-- [ ] Revalidate session/revision after any modal input resolves.
+- [x] Revalidate session/revision after any modal input resolves.
 - [x] Run end-to-end tests with forced disconnect during pending operations.
 - [ ] If authorized, commit with `feat(ui): handle collaboration reconnect and safe undo`.
 
@@ -191,7 +191,7 @@ func (c *Controller) Leave(ctx context.Context) error
 ## Phase acceptance
 
 - [x] Local and network executors pass the same conformance suite.
-- [ ] All map tools submit explicit operations when collaboration is active.
+- [x] All map tools submit explicit operations when collaboration is active.
 - [x] Speculation reconciles without declaring local state authoritative.
 - [ ] Collaboration state and conflicts remain understandable without color or new assets.
 - [x] Presence is lossy, bounded, and absent from saves/hashes.

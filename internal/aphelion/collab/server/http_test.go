@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"sdmm/internal/aphelion/collab/auth"
+	"sdmm/internal/aphelion/collab/compat"
+	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
 )
 
@@ -92,6 +95,35 @@ func TestHTTPHealthAndVersion(t *testing.T) {
 	}
 }
 
+func TestHTTPVersionPublishesCompatibilityMatrix(t *testing.T) {
+	t.Parallel()
+
+	matrix := compat.Matrix{
+		Releases: []compat.Release{
+			{Name: "previous", ProtocolVersions: []uint16{1}, SchemaVersions: []uint16{1}},
+			{Name: compat.CurrentRelease, ProtocolVersions: []uint16{1}, SchemaVersions: []uint16{1}},
+		},
+		RollingPairs: []compat.RollingPair{{From: "previous", To: compat.CurrentRelease}},
+	}
+	service := NewService(ServiceConfig{Compatibility: matrix})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	request := httptest.NewRequest(http.MethodGet, "/v1/version", nil)
+	response := httptest.NewRecorder()
+	service.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /v1/version status = %d", response.Code)
+	}
+	var body struct {
+		Compatibility compat.Matrix `json:"compatibility"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Compatibility.Releases) != 2 || len(body.Compatibility.RollingPairs) != 1 {
+		t.Fatalf("compatibility = %#v", body.Compatibility)
+	}
+}
+
 func TestHTTPLaunchTokenExpires(t *testing.T) {
 	t.Parallel()
 
@@ -113,6 +145,29 @@ func TestHTTPLaunchTokenExpires(t *testing.T) {
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expired launch token status = %d, want 401", response.StatusCode)
+	}
+}
+
+func TestHostedOwnerOperationReauthorizesCurrentSessionRole(t *testing.T) {
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer := &fakeHostedAuthorizer{session: auth.Session{
+		ActorID: actorID, Issuer: "https://issuer.example", Subject: "owner", DisplayName: "Hosted Owner", Role: auth.RoleOwner, ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}, HostedAuth: authorizer})
+	body := []byte(`{"role":"viewer","display_name":"Guest"}`)
+	allowed := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", "hosted-token", body)
+	_ = allowed.Body.Close()
+	if allowed.StatusCode != http.StatusCreated {
+		t.Fatalf("owner request status = %d", allowed.StatusCode)
+	}
+	authorizer.setRole(auth.RoleViewer)
+	denied := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", "hosted-token", body)
+	_ = denied.Body.Close()
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("downgraded request status = %d", denied.StatusCode)
 	}
 }
 

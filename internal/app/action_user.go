@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"sdmm/internal/aphelion/collab/model"
@@ -11,6 +12,7 @@ import (
 	"sdmm/internal/app/render"
 	"sdmm/internal/app/ui/cpwsarea/workspace"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap"
+	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/editor"
 	"sdmm/internal/app/ui/layout/lnode"
 	"sdmm/internal/app/window"
 	"sdmm/internal/dmapi/dmmap"
@@ -18,6 +20,7 @@ import (
 	"sdmm/internal/dmapi/dmmap/dmminstance"
 	"sdmm/internal/env"
 	w "sdmm/internal/imguiext/widget"
+	"sdmm/internal/platform"
 	"sdmm/internal/util"
 	"sdmm/internal/util/slice"
 
@@ -199,6 +202,88 @@ func (a *app) DoCreateLocalCollaborationSession() {
 			log.Error().Err(attachErr).Msg("Unable to attach collaboration session")
 			util.ShowErrorDialog("Unable to attach collaboration session: " + attachErr.Error())
 			go a.leaveCollaborationAfterAttachmentFailure()
+		})
+	}()
+}
+
+func (a *app) DoJoinCollaborationSession() {
+	selectedEditor := a.CurrentEditor()
+	if selectedEditor == nil {
+		util.ShowErrorDialog("Unable to join collaboration: no map is active")
+		return
+	}
+	var encodedInvitation string
+	dial.Open(dial.TypeCustom{
+		Title:       "Join Collaboration Session",
+		CloseButton: true,
+		Layout: w.Layout{
+			w.Text("Paste the invitation shared by the session owner."),
+			w.InputTextWithHint("##collaboration-invitation", "Invitation", &encodedInvitation).Width(-1),
+			w.Button("Join Session", func() {
+				if a.CurrentEditor() != selectedEditor || a.HasActiveCollaboration() {
+					util.ShowErrorDialog("Unable to join collaboration: the active map or session changed")
+					return
+				}
+				invitation, err := collabui.ParseInvitation(strings.TrimSpace(encodedInvitation))
+				encodedInvitation = ""
+				if err != nil {
+					util.ShowErrorDialog("Unable to join collaboration: " + err.Error())
+					return
+				}
+				imgui.CloseCurrentPopup()
+				go a.joinCollaborationSession(invitation, selectedEditor)
+			}),
+		},
+	})
+}
+
+func (a *app) joinCollaborationSession(invitation collabui.Invitation, selectedEditor *editor.Editor) {
+	ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+	defer cancel()
+	execution, prepareErr := collabui.PrepareJoinedSession(ctx, a.collaborationController, a.collaborationClient, invitation)
+	window.RunLater(func() {
+		if prepareErr != nil {
+			log.Error().Err(prepareErr).Msg("Unable to join collaboration")
+			util.ShowErrorDialog("Unable to join collaboration: " + prepareErr.Error())
+			return
+		}
+		attachErr := collabui.AttachPreparedSession(execution, selectedEditor, a.CurrentEditor() == selectedEditor)
+		if attachErr == nil {
+			a.collaborationEditor = selectedEditor
+			return
+		}
+		log.Error().Err(attachErr).Msg("Unable to attach joined collaboration session")
+		util.ShowErrorDialog("Unable to attach joined collaboration session: " + attachErr.Error())
+		go a.leaveCollaborationAfterAttachmentFailure()
+	})
+}
+
+func (a *app) DoCopyCollaborationInvitation(role collabui.InvitationRole, displayName string) {
+	client := a.collaborationClient
+	if client == nil || !a.HasActiveCollaboration() {
+		return
+	}
+	sessionID := client.Status().SessionID
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		invitation, err := client.CreateInvitation(ctx, role, displayName)
+		if err == nil {
+			var encoded string
+			encoded, err = collabui.EncodeInvitation(invitation)
+			if err == nil {
+				window.RunLater(func() {
+					if a.collaborationClient != client || !a.HasActiveCollaboration() || client.Status().SessionID != sessionID {
+						return
+					}
+					platform.SetClipboard(encoded)
+					log.Info().Str("role", string(role)).Msg("copied short-lived collaboration invitation")
+				})
+				return
+			}
+		}
+		window.RunLater(func() {
+			util.ShowErrorDialog("Unable to create collaboration invitation: " + err.Error())
 		})
 	}()
 }
