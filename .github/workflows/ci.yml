@@ -156,41 +156,83 @@ jobs:
 
       - name: Relay Race and Command Gates
         run: |
-          go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
-          go test ./cmd/apheliondmm-relay ./cmd/apheliondmm-healthcheck ./cmd/apheliondmm-loadtest ./internal/aphelion/collab/container -count=1
+          go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/servicehost ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
+          go test ./cmd/apheliondmm-relay ./cmd/apheliondmm-healthcheck ./cmd/apheliondmm-loadtest ./internal/aphelion/collab/windowsservice -count=1
 
-      - name: Validate Relay Compose
+      - name: Cross-compile Windows Service
         run: |
-          cp deploy/relay/.env.example deploy/relay/.env
-          cp deploy/relay/relay.yaml.example deploy/relay/relay.yaml
-          mkdir -p deploy/relay/secrets
-          printf 'ci-only-placeholder\n' > deploy/relay/secrets/cloudflare_tunnel_token.txt
-          docker compose --env-file deploy/relay/.env -f deploy/relay/compose.yaml -f deploy/relay/compose.loopback.yaml config --quiet
-          docker compose --env-file deploy/relay/.env -f deploy/relay/compose.yaml -f deploy/relay/compose.cloudflare.yaml config --quiet
+          GOOS=windows GOARCH=amd64 go build -trimpath -o apheliondmm-relay.exe ./cmd/apheliondmm-relay
+          GOOS=windows GOARCH=amd64 go build -trimpath -o apheliondmm-healthcheck.exe ./cmd/apheliondmm-healthcheck
 
-      - name: Build Stateless Relay Image
-        run: |
-          docker build \
-            --file deploy/relay/Dockerfile \
-            --build-arg APHELIONDMM_BUILD=ci \
-            --build-arg APHELIONDMM_REVISION="${GITHUB_SHA}" \
-            --tag apheliondmm-relay:ci \
-            .
-
-      - name: Exercise Relay Image Lifecycle
-        env:
-          APHELION_RELAY_TEST_IMAGE: apheliondmm-relay:ci
-        run: go test -tags=container ./internal/aphelion/collab/container -run '^TestRelayImageLifecycle$' -count=1 -timeout=5m -v
-
-      - name: Scan Stateless Relay Image
+      - name: Scan Relay Sources for Secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          scan-type: image
-          image-ref: apheliondmm-relay:ci
+          scan-type: fs
+          scan-ref: .
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
-          scanners: vuln,secret,misconfig
+          scanners: secret
+
+  relay-windows-service-gates:
+    name: Windows Relay Service Gates
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+
+      - name: Windows Service and Package Tests
+        shell: pwsh
+        run: |
+          go test ./cmd/apheliondmm-relay ./internal/aphelion/collab/servicehost ./internal/aphelion/collab/windowsservice -count=1 -timeout=5m
+
+      - name: Build and Validate Service Package
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'relay-package'
+          & ./deploy/relay/service.ps1 -Action Package -PackageRoot $packageRoot
+          $stage = Join-Path $packageRoot 'AphelionDMM-Relay-Windows-x64'
+          & (Join-Path $stage 'service.ps1') -Action Setup -PackageRoot $stage
+          $cloudflared = Join-Path $env:RUNNER_TEMP 'cloudflared.exe'
+          Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-windows-amd64.exe' -OutFile $cloudflared
+          & (Join-Path $stage 'service.ps1') -Action Validate -PackageRoot $stage -SkipCloudflare -CloudflaredPath $cloudflared
+
+      - name: Exercise Native Service Lifecycle
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'relay-package'
+          $stage = Join-Path $packageRoot 'AphelionDMM-Relay-Windows-x64'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'installed-relay'
+          $dataRoot = Join-Path $env:RUNNER_TEMP 'relay-data'
+          $installed = $false
+          try {
+            & (Join-Path $stage 'service.ps1') -Action Install -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
+            $installed = $true
+            Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
+            & (Join-Path $stage 'service.ps1') -Action Stop -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
+            & (Join-Path $stage 'service.ps1') -Action Start -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
+            Invoke-RestMethod http://127.0.0.1:8080/v1/version
+            & (Join-Path $stage 'service.ps1') -Action Update -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
+            Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
+          } finally {
+            if ($installed) {
+              & (Join-Path $stage 'service.ps1') -Action Uninstall -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot -PurgeData
+            }
+          }
+
+      - name: Upload Windows Relay Service Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AphelionDMM-Relay-Windows-x64
+          path: ${{ runner.temp }}/relay-package/AphelionDMM-Relay-Windows-x64.zip
+          if-no-files-found: error
 
   hosted-collaboration-gates:
     name: Hosted Collaboration Gates

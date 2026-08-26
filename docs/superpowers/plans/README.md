@@ -1,10 +1,10 @@
 # Multiplayer implementation roadmap
 
-> **Current status (2026-08-26):** The active online architecture is the client-owned protocol-v2 relay in `2026-08-26-client-owned-relay.md`. The authoritative remaining-work ledger is `2026-08-26-final-multiplayer-progression-sheet.md`. The phases below are retained as protocol-v1 and shared-foundation implementation history. Content Tools remains excluded by explicit direction.
+> **Current status (2026-08-27):** The active online architecture is the client-owned protocol-v2 relay in `2026-08-26-client-owned-relay.md`, deployed through the native Windows-service plan in `2026-08-27-windows-relay-service.md`. The authoritative remaining-work ledger is `2026-08-26-final-multiplayer-progression-sheet.md`. The phases below are retained as protocol-v1 and shared-foundation implementation history. Content Tools remains excluded by explicit direction.
 
 ## Active protocol-v2 path
 
-1. Deploy the locally verified stateless relay at `mapping.a13.info` without Cloudflare Access.
+1. Deploy the packaged `AphelionDMMRelay` Windows service at `mapping.a13.info` without Cloudflare Access.
 2. Run [`client-owned-relay-human-test-guide.md`](../../testing/client-owned-relay-human-test-guide.md) on two computers and separate networks.
 3. Complete the deferred desktop owner-transfer flow before release acceptance.
 4. Prepare a separate post-pilot cutover plan only after that evidence passes.

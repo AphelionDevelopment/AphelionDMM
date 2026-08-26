@@ -37,7 +37,6 @@ dst/
 /deploy/production/secrets/
 /deploy/production/backups/
 
-# Local stateless-relay configuration and tunnel secret
-/deploy/relay/.env
+# Local Windows relay configuration and tunnel secret
 /deploy/relay/relay.yaml
-/deploy/relay/secrets/
+/deploy/relay/cloudflare_tunnel_token.txt

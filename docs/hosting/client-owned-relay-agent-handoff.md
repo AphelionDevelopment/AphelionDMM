@@ -1,79 +1,72 @@
 # Client-owned relay agent handoff
 
-**Status:** Container, operator, and CI bundle implemented and locally verified; public deployment pending  
-**Public endpoint:** `https://mapping.a13.info`  
+**Status:** Native Windows service, packaging, installer, and CI gates implemented; public deployment pending
+
+**Public endpoint:** `https://mapping.a13.info`
+
 **Protocol:** AphelionDMM relay v2
 
 ## System contract
 
 The relay is a disposable connection broker. Owners create rooms, publish admission digests, validate and order map operations, and persist authority locally. Participants persist acknowledged replicas and pending work locally. Application frames are signed and end-to-end encrypted. Relay restarts require owner-first reconnection, not server restore.
 
-The relay must never gain a database, account system, map volume, user profile store, server-side invitation minting, or decryption key. Protocol-v1 hosted code remains separate and legacy.
+Never add a database, account system, map volume, user profile store, server-side invitation minting, or decryption key. Protocol-v1 hosted code is separate and legacy.
 
 ## Source roles
 
-- `cmd/apheliondmm-relay`: strict `-config` command, signals, bounded shutdown.
-- `internal/aphelion/collab/relay`: in-memory registry, routing, WebSocket service, limits, health/version/metrics.
-- `internal/aphelion/collab/relayclient`: client admission, signing/encryption, replay rejection, owner/participant adapters.
+- `cmd/apheliondmm-relay`: console and Windows SCM entry point.
+- `internal/aphelion/collab/relayruntime`: shared relay runtime.
+- `internal/aphelion/collab/servicehost`: readiness gating and dedicated connector supervision.
+- `internal/aphelion/collab/relay`: in-memory registry, routing, limits, health, version, and metrics.
+- `internal/aphelion/collab/relayclient`: admission, signing, encryption, replay rejection, and client adapters.
 - `internal/aphelion/collab/protocolv2`: public wire and invitation rules.
 - `api/collaboration/relay-v2-asyncapi.yaml`: protocol contract.
-- `deploy/relay`: reviewed container, Compose overlays, strict configuration, and operator entry point.
+- `deploy/relay/service.ps1`: package, validation, installation, operations, update, and uninstall.
 - `docs/testing/client-owned-relay-human-test-guide.md`: public pilot procedure.
 
-## Configuration schema
+## Installed contract
 
-One non-secret YAML file configures version, public origin, bind address, trusted proxy CIDRs, room TTL, connection/message/byte limits, log level, and the private metrics bind address. The checked-in example is the schema authority. Secrets must not be added to this file.
+- Windows service: `AphelionDMMRelay`
+- Account: `NT AUTHORITY\LocalService`
+- Programs: `C:\Program Files\AphelionDMM Relay`
+- Configuration and connector token: `C:\ProgramData\AphelionDMM\Relay`
+- Relay origin: `http://127.0.0.1:8080`
+- Metrics: loopback only
+- Logs: Windows Event Log source `AphelionDMMRelay`
 
-For Cloudflare, the only secret is a dedicated tunnel token stored as `deploy/relay/secrets/cloudflare_tunnel_token.txt`. It is mounted only into the tunnel sidecar. Do not print it, put it in `.env`, or commit it.
+The service runs the relay in-process and supervises its own `cloudflared.exe` child. It does not install or modify Cloudflare's fixed-name Windows service and must not reuse the Meridian-Rift tunnel.
 
-## Expected operator interface
+## Configuration and secret
+
+`relay.yaml` is the only application configuration. It holds the public origin, loopback bind addresses, trusted proxy CIDRs, limits, TTL, and log level. The tunnel token is a separate ACL-restricted file because it is secret and must not be placed in shareable configuration.
+
+## Operator interface
 
 ```powershell
-& .\deploy\relay\operations.ps1 -Action Setup
-& .\deploy\relay\operations.ps1 -Action Validate
-& .\deploy\relay\operations.ps1 -Action Build
-& .\deploy\relay\operations.ps1 -Action StartLoopback
-& .\deploy\relay\operations.ps1 -Action StartCloudflare
-& .\deploy\relay\operations.ps1 -Action Status
-& .\deploy\relay\operations.ps1 -Action Logs
-& .\deploy\relay\operations.ps1 -Action Update
-& .\deploy\relay\operations.ps1 -Action Stop
+& .\service.ps1 -Action Setup
+& .\service.ps1 -Action Package -Force
+& .\service.ps1 -Action Validate -TunnelTokenFile C:\secure\token.txt
+& .\service.ps1 -Action Install -TunnelTokenFile C:\secure\token.txt
+& .\service.ps1 -Action Start
+& .\service.ps1 -Action Status
+& .\service.ps1 -Action Logs
+& .\service.ps1 -Action Update -SkipCloudflare
+& .\service.ps1 -Action Stop
+& .\service.ps1 -Action Uninstall
 ```
 
 There are deliberately no backup, restore, migration, database, or user-management actions.
 
 ## Public routing
 
-Use a dedicated tunnel and route `mapping.a13.info` to `http://relay:8080`. Do not use Cloudflare Access. Do not reuse the Meridian-Rift tunnel. Trust Cloudflare client-address headers only from the Compose network CIDR containing the tunnel sidecar.
+Use a dedicated remotely managed tunnel and route `mapping.a13.info` to `http://127.0.0.1:8080`. Cloudflare Access must be disabled. The service needs outbound connectivity only; do not open port 8080 in the inbound firewall.
 
-## Health and privacy
+## Recovery and limits
 
-Public checks:
+After a relay restart, the owner recreates the room and admissions from local state, then participants reconnect and receive replay or snapshot from the owner. Pending local work remains pending. If the owner client is unavailable, editing remains paused.
 
-```powershell
-Invoke-RestMethod https://mapping.a13.info/v1/health/live
-Invoke-RestMethod https://mapping.a13.info/v1/health/ready
-Invoke-RestMethod https://mapping.a13.info/v1/version
-```
+The protocol validates dual-signed owner transfer, but complete desktop owner-transfer UX remains deferred. Same-profile dual-instance tests share an installation identity, so public acceptance must use separate computers or isolated user profiles.
 
-`/metrics` exposes only aggregate active connections and rooms. Relay logs must not contain client plaintext, display names, map paths/content, invitations, capabilities, group keys, or identity private keys.
+## Protected boundary
 
-## Recovery
-
-After a relay restart:
-
-1. Owner selects Retry Reconnect, recreating the room and admissions from local state.
-2. Participants select Retry Reconnect.
-3. Participants receive replay or snapshot from the owner.
-4. Pending local work remains pending and is not silently resent.
-5. Compare client revision and map hash.
-
-If the owner client is unavailable, editing remains paused. Do not invent a server repair or restore procedure.
-
-## Known pre-pilot limits
-
-The protocol and relay validate dual-signed owner transfer, but the complete desktop transfer action is not yet wired. Automatic retry is not claimed; the current recovery control is explicit. Same-profile dual-instance tests share an installation identity, so public acceptance should use two computers or isolated user profiles.
-
-## Protected-file boundary
-
-The protocol-v2 relay deployment and CI file set was explicitly confirmed on 2026-08-26. Future changes to `deploy/relay/*`, `.github/workflows/ci.yml`, or `Taskfile.yml` still require a new exact-file/effect review under `AGENTS.md`.
+The native Windows service deployment and CI set was explicitly approved on 2026-08-27. Future changes to `deploy/relay/*`, `.github/workflows/ci.yml`, or `Taskfile.yml` require a new exact-file/effect review.

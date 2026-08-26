@@ -13,7 +13,7 @@ The public service becomes a lightweight WebSocket relay. It tracks only bounded
 
 Shared editing pauses whenever the owner is offline. Participants keep their last accepted local copy and pending work, but no client elects itself authority and no independent edit stream is accepted. When the owner returns, peers reconnect and reconcile from their local revision and hash.
 
-The official client defaults to `https://mapping.a13.info`. Users can configure another compatible relay. Self-hosters receive one relay configuration file, a container image, an optional Cloudflare Tunnel sidecar, and one setup/operations entry point.
+The official client defaults to `https://mapping.a13.info`. Users can configure another compatible relay. Self-hosters receive one relay configuration file, a native Windows service package with a supervised Cloudflare connector, and one setup/operations entry point. This deployment detail is superseded by `2026-08-27-windows-relay-service-design.md` where this older design mentions containers.
 
 ## Goals
 
@@ -294,13 +294,13 @@ observability:
   metrics_bind_address: 127.0.0.1:9090
 ```
 
-No database, OIDC, map directory, backup directory, or migration setting exists. Secrets are not placed in this file. A Cloudflare tunnel token remains a separate secret file or container secret because embedding it in a shareable configuration file would make safe replication harder.
+No database, OIDC, map directory, backup directory, or migration setting exists. Secrets are not placed in this file. A Cloudflare tunnel token remains a separate ACL-protected secret file because embedding it in a shareable configuration file would make safe replication harder.
 
 ### Automated operator path
 
-The supported deployment contains the relay and an optional `cloudflared` sidecar. A single PowerShell entry point provides `setup`, `validate`, `start`, `status`, `logs`, `update`, and `stop` actions. `setup` creates the example configuration, checks Docker and file permissions, validates the tunnel-token secret, and prints the one Cloudflare public-hostname mapping needed by the operator.
+The supported deployment is one native Windows service containing the relay runtime and supervising a dedicated `cloudflared` child. A single PowerShell entry point provides `setup`, `package`, `validate`, `install`, `start`, `status`, `logs`, `update`, `stop`, and `uninstall` actions. It validates package hashes, the pinned connector, file ACL expectations, the tunnel token, and the one Cloudflare public-hostname mapping needed by the operator.
 
-The official deployment publishes `mapping.a13.info` as a public hostname with no Cloudflare Access policy. The origin binds only to loopback or the private container network. Self-hosters may use Cloudflare Tunnel, another WebSocket-capable reverse proxy, or direct TLS termination.
+The official deployment publishes `mapping.a13.info` as a public hostname with no Cloudflare Access policy. The origin binds only to loopback. Self-hosters may use the supervised Cloudflare Tunnel connector or another WebSocket-capable host-local reverse proxy.
 
 ### Scaling boundary
 
@@ -312,7 +312,7 @@ The migration keeps v1 operational until v2 passes human online testing:
 
 1. Add the local client store and owner/replica abstractions behind tests.
 2. Add protocol-v2 crypto and compatibility fixtures.
-3. Add the stateless relay and its container entry point.
+3. Add the stateless relay and its native Windows service entry point.
 4. Connect desktop owner and participant flows to the relay.
 5. Add replay, snapshot, restart, pause, desync, and owner-name tests.
 6. Add the single-file deployment and public-host operations path.
@@ -334,7 +334,7 @@ Existing deterministic operation/model/engine code is reused. Existing PostgreSQ
 - Owner-offline pause and online owner-transfer tests.
 - Desync escalation tests: replay once, snapshot once, then stable failure.
 - Race tests for owner ordering, relay routing, reconnect, shutdown, and local-store access.
-- Container tests proving startup requires only the relay configuration and optional tunnel secret.
+- Package and Windows-service tests proving startup requires only the relay configuration and optional tunnel secret.
 
 ### Human gates
 

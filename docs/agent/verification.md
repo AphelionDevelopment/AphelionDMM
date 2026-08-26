@@ -6,7 +6,7 @@ Report the exact level reached: static review, focused test, repository test, cr
 
 ## Current toolchain
 
-Use the versions selected by `go.mod`, CI, and the Task files. Record `go version`, `rustc --version`, `task --version`, Docker Engine/Compose versions, and `$LASTEXITCODE` after native Windows commands. The shipped editor remains `dst/StrongDMM.exe` until a separately approved branding change.
+Use the versions selected by `go.mod`, CI, and the Task files. Record `go version`, `rustc --version`, `task --version`, Windows version, the packaged relay and connector SHA-256 values, connector Authenticode status, and `$LASTEXITCODE` after native Windows commands. The shipped editor remains `dst/StrongDMM.exe` until a separately approved branding change.
 
 ## Protocol-v2 narrow gates
 
@@ -30,7 +30,7 @@ task build
 Get-FileHash .\dst\StrongDMM.exe -Algorithm SHA256
 ```
 
-Run the relay command with a real YAML file, verify `/v1/health/live`, `/v1/health/ready`, `/v1/version`, and `/metrics`, route encrypted owner/editor traffic, restart only the relay, and prove clients reconstruct the room without server persistence. Container evidence must use the actual built image and Compose overlays, not only schema parsing.
+Run the relay command with a real YAML file, verify `/v1/health/live`, `/v1/health/ready`, `/v1/version`, and `/metrics`, route encrypted owner/editor traffic, restart only the relay, and prove clients reconstruct the room without server persistence. Native-service evidence must use the actual packaged ZIP and `service.ps1` entry point. On an elevated disposable Windows host, exercise install, health, stop/start, update rollback, conservative uninstall, and data purge without touching another service.
 
 ## Human acceptance
 

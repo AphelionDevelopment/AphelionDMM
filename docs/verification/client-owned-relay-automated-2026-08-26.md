@@ -1,4 +1,6 @@
-# Client-owned relay automated acceptance
+# Client-owned relay automated acceptance (superseded deployment evidence)
+
+> Protocol and client evidence in this record remains valid. Its Docker deployment evidence was superseded on 2026-08-27 by `windows-relay-service-automated-2026-08-27.md` and is retained only as historical verification.
 
 **Date:** 2026-08-26  
 **Scope:** Protocol-v2 client authority, opaque relay, desktop integration, load/fault gates, protected container/operator bundle, and CI entry points  

@@ -1,14 +1,16 @@
-# Game-server deployment agent handoff
+# Windows relay-server deployment agent handoff
 
 **Target:** Public protocol-v2 relay at `https://mapping.a13.info`
-**Host:** Dedicated server that also runs Meridian-Rift
-**Boundary:** One isolated stateless relay container and, when used, one dedicated Cloudflare Tunnel sidecar
+
+**Host:** Windows server that also runs Meridian-Rift
+
+**Boundary:** One isolated native service, `AphelionDMMRelay`, supervising one dedicated Cloudflare connector process
 
 ## Objective
 
-Run the AphelionDMM relay without changing, restarting, or sharing storage with Meridian-Rift. Protocol v2 needs no PostgreSQL, OIDC provider, map storage, account database, backup job, or public origin port. Clients own all durable collaboration data.
+Install the stateless AphelionDMM relay without changing, restarting, or sharing storage with Meridian-Rift. Protocol v2 needs no PostgreSQL, OIDC provider, map storage, account database, backup job, container runtime, or public origin port. Clients own all durable collaboration data.
 
-Read `AGENTS.md`, the agent security/verification guides, the protocol-v2 design, and `client-owned-relay-agent-handoff.md` before acting. Deploy only an explicitly authorized immutable revision. Use PowerShell for Windows host work. Never paste a tunnel token, invitation, group key, identity key, or client database into chat or logs.
+Deploy only an explicitly authorized immutable revision or ZIP artifact. Use an elevated PowerShell session for server changes. Never paste a tunnel token, invitation, group key, identity key, or client database into chat or logs.
 
 ## Required topology
 
@@ -17,81 +19,87 @@ StrongDMM clients
     -> https://mapping.a13.info
     -> Cloudflare edge
     -> dedicated apheliondmm-mapping tunnel
-    -> http://relay:8080
-    -> stateless apheliondmm-relay
+    -> cloudflared child supervised by AphelionDMMRelay
+    -> http://127.0.0.1:8080
+    -> in-process stateless relay
 ```
 
 - Do not reuse or modify the existing Meridian-Rift tunnel.
+- Do not modify an existing `Cloudflared` Windows service.
 - Do not create a Cloudflare Access application for `mapping.a13.info`.
-- Do not expose relay port 8080 publicly. Use the loopback overlay only for local certification.
-- Do not mount Meridian-Rift files, maps, repositories, Docker socket, or persistent data into the relay.
-- A relay restart intentionally loses rooms. Owners recreate them from local client state.
+- Do not expose port 8080 publicly or create an inbound firewall rule.
+- A relay restart intentionally loses rooms; owners recreate them from client state.
 
 ## Read-only inventory
 
-Before installation, record Docker Engine/Compose versions, available CPU/memory/storage, existing container names/networks, listening ports, time synchronization, service-account ownership, and outbound Cloudflare connectivity. Do not inspect existing container environment blocks. Stop if the new Compose project would conflict with or require stopping an existing service.
+Before installation, record Windows version, free CPU/memory/storage, existing service names, listening ports, time synchronization, and outbound Cloudflare connectivity. Confirm that `AphelionDMMRelay` is unused and that `mapping.a13.info` has no competing route. Do not inspect existing service environment blocks or secret files. Stop if installation would require changing or stopping another service.
 
-Confirm that the deployment revision is clean and approved, and that `mapping.a13.info` has no competing DNS route. Record sanitized evidence under `docs/verification/`.
+## Package and install
 
-## Operator path
-
-The reviewed relay bundle provides one entry point:
+Build on a trusted workstation with:
 
 ```powershell
-& .\deploy\relay\operations.ps1 -Action Setup
-& .\deploy\relay\operations.ps1 -Action Validate
-& .\deploy\relay\operations.ps1 -Action Build
-& .\deploy\relay\operations.ps1 -Action StartLoopback
-& .\deploy\relay\operations.ps1 -Action Status
-& .\deploy\relay\operations.ps1 -Action Stop
+task package-relay-windows
 ```
 
-After loopback certification, install the dedicated tunnel token directly at `deploy/relay/secrets/cloudflare_tunnel_token.txt`, then run:
+Transfer `dst\relay-package\AphelionDMM-Relay-Windows-x64.zip` and verify its SHA-256 against the handoff record. Extract it on the server. No Go, Git, Docker, or source checkout is required there.
+
+In an elevated PowerShell session in the extracted directory:
 
 ```powershell
-& .\deploy\relay\operations.ps1 -Action StartCloudflare
-& .\deploy\relay\operations.ps1 -Action Status
+& .\service.ps1 -Action Setup
+notepad .\relay.yaml
+& .\service.ps1 -Action Validate -TunnelTokenFile C:\secure\cloudflare_tunnel_token.txt
+& .\service.ps1 -Action Install -TunnelTokenFile C:\secure\cloudflare_tunnel_token.txt
+& .\service.ps1 -Action Status
 ```
 
-The protected files were explicitly confirmed and locally exercised on 2026-08-26. Deploy the reviewed bundle from an authorized immutable revision; do not reproduce or improvise it on the server.
+The installer verifies manifest hashes plus the pinned connector's SHA-256 and Authenticode signature. It installs under `C:\Program Files\AphelionDMM Relay`, stores configuration and the ACL-restricted token under `C:\ProgramData\AphelionDMM\Relay`, runs as `LocalService`, configures delayed automatic start and SCM recovery, and starts the service.
+
+Securely remove the temporary input token file after successful installation.
 
 ## Cloudflare route
 
-Create a dedicated remotely managed tunnel, recommended name `apheliondmm-mapping`, with one public hostname:
+Create a dedicated remotely managed tunnel, recommended name `apheliondmm-mapping`, with:
 
 | Setting | Value |
 | --- | --- |
 | Hostname | `mapping.a13.info` |
-| Service | `http://relay:8080` |
+| Service | `http://127.0.0.1:8080` |
 | Cloudflare Access | Disabled |
 
-The public endpoint must accept ordinary client WebSockets without Cloudflare account membership. Reconfirm the pre-existing Meridian tunnel is unchanged.
+The public endpoint must accept ordinary WebSocket clients without Cloudflare account membership. Reconfirm the pre-existing Meridian-Rift tunnel and service are unchanged.
 
 ## Certification
 
-From loopback, then a separate external network, verify:
+Verify locally and from a separate external network:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8080/v1/health/live
 Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
 Invoke-RestMethod http://127.0.0.1:8080/v1/version
-
 Invoke-RestMethod https://mapping.a13.info/v1/health/live
 Invoke-RestMethod https://mapping.a13.info/v1/health/ready
 Invoke-RestMethod https://mapping.a13.info/v1/version
 ```
 
-Then follow the client-owned relay human test guide with two computers on separate networks. Inspect relay logs and metrics for map text, paths, display names, invitations, capabilities, group keys, and private keys; expected disclosure is zero.
+Then run `docs/testing/client-owned-relay-human-test-guide.md` with two computers on separate networks. Restart only `AphelionDMMRelay`; verify owner-first room recovery, participant replay or snapshot, equal final revision and map hash, and zero plaintext or credential disclosure in Event Log output.
 
-Restart only the relay. The owner must reconnect first and recreate the room, followed by participants. Confirm the final client revisions and map hashes match. No restore operation should exist or be required.
+## Update, rollback, and removal
 
-## Update and rollback
+For a relay-only update, extract the approved new ZIP and run:
 
-`operations.ps1 -Action Update` should build or pull the authorized image, replace only this Compose project's relay, wait for health, and retain the prior image tag for manual rollback. A bad public route is rolled back by disabling only the new `mapping.a13.info` route. A bad relay release is rolled back to the recorded prior image. Never delete client data: it is not on this server.
+```powershell
+& .\service.ps1 -Action Update -SkipCloudflare
+```
+
+The operation retains the installed dedicated connector/token and automatically restores prior relay files if readiness fails. A bad public route is rolled back by disabling only the `mapping.a13.info` route.
+
+Uninstall with `-Action Uninstall`. Configuration and token data remain unless `-PurgeData` is explicitly supplied. The script refuses to remove a same-named service if its executable is not the expected AphelionDMM relay.
 
 ## Evidence and handback
 
-Record the approved revision, image ID/digest, non-secret relay-config SHA-256, Docker versions, tunnel name/UUID, DNS route, health/version timestamps, external WebSocket result, relay-restart result, privacy scan, and confirmation that Meridian-Rift and its tunnel were unchanged.
+Record the approved revision, ZIP SHA-256, package-manifest hashes, relay config SHA-256, service account/start/recovery state, connector version/hash/signature, tunnel name/UUID, DNS route, local and external health/version timestamps, WebSocket pilot result, restart-recovery result, privacy scan, and confirmation that Meridian-Rift and its tunnel were unchanged.
 
 Report one of:
 
@@ -99,6 +107,4 @@ Report one of:
 - **Public route staged, certification incomplete**
 - **Not deployed**, with the exact prerequisite or stop condition
 
-## Legacy protocol-v1 material
-
-The older `deploy/production` PostgreSQL/OIDC stack and its backup/restore procedure apply only to server-authoritative protocol v1. Preserve them as legacy evidence, but do not deploy them for the protocol-v2 relay.
+The older `deploy/production` PostgreSQL/OIDC material applies only to server-authoritative protocol v1. Do not deploy it for protocol v2.

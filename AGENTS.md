@@ -70,6 +70,7 @@ Do not create or select art, sound, lore, descriptions, item names, or branding.
 - Protocol v2 is owner-client authoritative. The owner's client validates and orders durable map operations; every client persists its own acknowledged replica.
 - The public relay is stateless and payload-opaque. It stores no maps, operation logs, user accounts, or databases.
 - Collaboration pauses while the owner is offline. A relay restart is recovered from client state, never a server restore.
+- Protocol-v2 production hosting uses the `AphelionDMMRelay` native Windows service and its supervised dedicated connector. Do not add a Docker dependency, reuse another tunnel, or modify an existing `Cloudflared` service.
 - Durable edits are explicit, deterministic, idempotent operations; presence is ephemeral and separate.
 - Every accepted operation receives a monotonically increasing document revision.
 - Undo submits a new actor-scoped inverse operation with preconditions.

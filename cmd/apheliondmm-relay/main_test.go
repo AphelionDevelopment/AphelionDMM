@@ -30,6 +30,13 @@ func TestRunCanValidateConfigWithoutListening(t *testing.T) {
 	require.Contains(t, output.String(), "configuration valid")
 }
 
+func TestRunRequiresCloudflaredAndTokenFileTogether(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(validRelayConfig), 0o600))
+	require.ErrorContains(t, run(context.Background(), []string{"-config", path, "-cloudflared", "cloudflared.exe"}, &bytes.Buffer{}), "tunnel-token-file")
+	require.ErrorContains(t, run(context.Background(), []string{"-config", path, "-tunnel-token-file", "token.txt"}, &bytes.Buffer{}), "cloudflared")
+}
+
 const validRelayConfig = `version: 1
 public_origin: https://mapping.a13.info
 bind_address: 127.0.0.1:8080

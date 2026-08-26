@@ -58,9 +58,9 @@ tasks:
       - go build {{.RELAY_BUILD_ARGS}} -o "dst/{{.RELAY_BIN_DST}}" ./cmd/apheliondmm-relay
       - go build -trimpath -ldflags="-s -w" -o "dst/{{.HEALTHCHECK_BIN_DST}}" ./cmd/apheliondmm-healthcheck
 
-  build-relay-image:
+  package-relay-windows:
     cmds:
-      - docker build --file deploy/relay/Dockerfile --build-arg APHELIONDMM_BUILD=self-hosted --build-arg APHELIONDMM_REVISION={{.GIT_REV}} --tag apheliondmm-relay:local .
+      - pwsh -NoProfile -NonInteractive -File deploy/relay/service.ps1 -Action Package -PackageRoot dst/relay-package -Force
 
   build:
     cmds:
@@ -73,14 +73,15 @@ tasks:
 
   test-relay:
     cmds:
-      - go test ./internal/aphelion/collab/protocolv2 ./internal/aphelion/collab/identity ./internal/aphelion/collab/authority ./internal/aphelion/collab/replica ./internal/aphelion/collab/container -count=1
-      - go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
+      - go test ./internal/aphelion/collab/protocolv2 ./internal/aphelion/collab/identity ./internal/aphelion/collab/authority ./internal/aphelion/collab/replica ./internal/aphelion/collab/servicehost ./internal/aphelion/collab/windowsservice -count=1
+      - go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/servicehost ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
       - go test ./cmd/apheliondmm-relay ./cmd/apheliondmm-healthcheck ./cmd/apheliondmm-loadtest -count=1
 
   verify-relay:
     cmds:
       - task: test-relay
       - task: build-relay
+      - task: package-relay-windows
 
   test-rust:
     dir: third_party/sdmmparser/src

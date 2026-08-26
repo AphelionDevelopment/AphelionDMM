@@ -1,12 +1,13 @@
 # AphelionDMM multiplayer progression sheet
 
-**Status date:** 2026-08-26  
+**Status date:** 2026-08-27
+
 **Primary online design:** Client-owned protocol v2 with a stateless public relay
 **Excluded:** Content Tools implementation, public session discovery, and general release publication
 
 ## Bottom line
 
-Protocol-v2 foundations, local persistence, owner authority, encrypted relay routing, desktop start/join/edit paths, explicit reconnect, real relay/load smoke paths, and the protected relay container/operator/CI bundle are implemented and locally verified in the working tree.
+Protocol-v2 foundations, local persistence, owner authority, encrypted relay routing, desktop start/join/edit paths, explicit reconnect, real relay/load smoke paths, and the protected native Windows service/operator/CI bundle are implemented and locally verified in the working tree.
 
 Automated work has reached the public deployment and human-test gate. The remaining first-pilot prerequisite is to deploy and externally verify `mapping.a13.info`. Desktop owner transfer is explicitly deferred from the first pilot; it remains required before release acceptance.
 
@@ -19,14 +20,14 @@ Automated work has reached the public deployment and human-test gate. The remain
 | Client identity and protected secret references | Yes | Focused tests | No | Two-machine identity/restart exercise |
 | Client-owned SQLite authority/replica durability | Yes | Focused crash/reopen tests | No | Desktop process interruption and pending-state observation |
 | Owner authority, replay/snapshot, conflicts, inverse | Yes | Real in-process relay convergence | No | Adverse desync pilot |
-| Stateless relay registry/router/service | Yes | Command, container, and relay-restart tests | No | Public Cloudflare route |
-| Abuse/privacy controls | Yes | Focused, smoke, static, and image-scan assertions | No | Public log review |
+| Stateless relay registry/router/service | Yes | Command, package, and relay-restart tests | No | Elevated SCM gate and public Cloudflare route |
+| Abuse/privacy controls | Yes | Focused, smoke, static, vulnerability, and secret-scan assertions | No | Public Event Log review |
 | Desktop online start/join/edit/viewer/name paths | Yes | Windows build, automated app tests | No | Two-machine UI and profile propagation |
 | Manual relay reconnect | Implemented | Package/app gates | No | Real desktop owner-first restart exercise |
 | Automatic reconnect | No | No | No | Manual recovery accepted for first pilot; reconsider from pilot evidence |
 | Online owner transfer | Core only | Authority/relay tests | No | Deferred from first pilot; complete desktop offer/accept/role transition before release |
 | Load runner | 2/8/32 opaque routing | Repeated race gate | No | Durable bursts, slow consumer, invalid/expired/replay and desync scenarios |
-| Relay deployment bundle | Yes | Full operator and image lifecycle | No | Install on dedicated host and publish route |
+| Relay deployment bundle | Yes | Package/validation path; SCM lifecycle encoded in Windows CI | No | Run elevated CI/host lifecycle, install on dedicated host, and publish route |
 | Agent/operator/test documentation | Yes | Documentation/privacy gates | No | Add public-pilot evidence after testing |
 | Meridian integration | Existing staged-map contracts retained | Not rerun in this branch | No | Post-relay map acceptance when requested |
 
@@ -36,17 +37,19 @@ Automated work has reached the public deployment and human-test gate. The remain
 - Relay and relay-client race tests passed.
 - The shipped `apheliondmm-relay` command built, became healthy, and routed encrypted owner/editor traffic without logging the fixture display name.
 - The client-owned load runner passed 2, 8, and 32 participants repeatedly under the race detector after repairing an admission-publication ordering race with bounded participant retry.
-- `task build` produced `dst/StrongDMM.exe`; the current recorded SHA-256 is `E8DD878CFDDAB5CD400D22123825AC5340F28C414292497D7A178549459741D7`.
+- The protocol-v2 Docker/Compose deployment was removed and replaced by the `AphelionDMMRelay` native Windows service, an in-process relay runtime, supervised dedicated connector, signed/pinned connector validation, rollback-safe updates, conservative uninstall, Windows Event Log integration, and a distributable ZIP.
+- The 2026-08-27 build produced `dst/StrongDMM.exe` and `dst/relay-package/AphelionDMM-Relay-Windows-x64.zip`; their current hashes are recorded in `docs/verification/windows-relay-service-automated-2026-08-27.md`.
 
-The dated Task 13 evidence is in `docs/verification/client-owned-relay-automated-2026-08-26.md`. These remain local automated results, not public acceptance.
+Protocol/client Task 13 evidence is in `docs/verification/client-owned-relay-automated-2026-08-26.md`. Native-service evidence is in `docs/verification/windows-relay-service-automated-2026-08-27.md`. These remain local automated results, not public acceptance.
 
 ## Remaining work before human testing
 
 ### Deployment prerequisite
 
-- Install the reviewed relay bundle on the dedicated host from an authorized immutable revision.
+- Let the protected Windows CI job exercise elevated install, stop/start, update, and uninstall, or run the same lifecycle on an elevated disposable Windows host.
+- Install the reviewed Windows relay ZIP on the dedicated host from an authorized immutable revision.
 - Create a dedicated `apheliondmm-mapping` tunnel without modifying the existing `bark` tunnel.
-- Route `mapping.a13.info` to `http://relay:8080` without Cloudflare Access.
+- Route `mapping.a13.info` to `http://127.0.0.1:8080` without Cloudflare Access.
 - Verify public health, readiness, version, WebSocket routing, and sanitized logs from an external network.
 
 ### Human-only after those gates
@@ -64,8 +67,8 @@ The PostgreSQL/OIDC hosted stack remains available as protocol-v1 compatibility 
 
 | Target | Decision |
 | --- | --- |
-| Continue automated implementation | **Automated pre-pilot gates complete** |
-| Begin public two-network pilot | **Ready after public route deployment and external health/WebSocket check** |
+| Continue local automated implementation | **Complete except administrator-only SCM execution** |
+| Begin public two-network pilot | **Ready after elevated service lifecycle, public route deployment, and external health/WebSocket check** |
 | Deploy PostgreSQL/OIDC for v2 | **Do not do this** |
 | Publish `mapping.a13.info` without Cloudflare Access | **Next deployment action; Cloudflare inventory is conflict-free** |
 | Claim multiplayer complete | **Not justified until public pilot passes** |

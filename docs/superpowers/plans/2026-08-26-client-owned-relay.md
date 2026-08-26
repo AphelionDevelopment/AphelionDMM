@@ -6,7 +6,9 @@
 
 **Architecture:** The desktop owner runs the existing deterministic document authority and commits accepted operations to local SQLite before broadcasting them. Every participant keeps a durable SQLite replica and communicates through encrypted, signed protocol-v2 envelopes; the relay sees only bounded routing metadata and keeps rooms in memory. Protocol v1 remains operational and unchanged until the v2 online pilot passes human acceptance.
 
-**Tech Stack:** Go 1.25.13, `github.com/coder/websocket` v1.8.15, standard-library Ed25519, `golang.org/x/crypto/chacha20poly1305`, `modernc.org/sqlite` v1.57.0 / SQLite 3.53.3, strict YAML, Docker Compose, optional Cloudflare Tunnel.
+**Tech Stack:** Go 1.25.13, `github.com/coder/websocket` v1.8.15, standard-library Ed25519, `golang.org/x/crypto/chacha20poly1305`, `modernc.org/sqlite` v1.57.0 / SQLite 3.53.3, strict YAML, and a native Windows service with a supervised Cloudflare Tunnel connector.
+
+> **Deployment supersession (2026-08-27):** Task 11's Docker implementation is retained below as completed history. It was replaced by `2026-08-27-windows-relay-service.md`; active protocol-v2 deployment must use the native Windows service package.
 
 **Spec:** `docs/superpowers/specs/2026-08-26-client-owned-relay-design.md`
 
