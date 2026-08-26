@@ -1,344 +1,104 @@
 # Game-server deployment agent handoff
 
-**Prepared:** 2026-08-26  
-**Target:** AphelionDMM hosted collaboration at `https://mapping.a13.info`  
-**Host:** The dedicated server that already runs Meridian-Rift  
-**Deployment model:** One isolated Docker Compose project with PostgreSQL, one hosted-service replica, and one dedicated Cloudflare Tunnel sidecar
+**Target:** Public protocol-v2 relay at `https://mapping.a13.info`
+**Host:** Dedicated server that also runs Meridian-Rift
+**Boundary:** One isolated stateless relay container and, when used, one dedicated Cloudflare Tunnel sidecar
 
 ## Objective
 
-Install and certify the AphelionDMM hosted collaboration service on the Meridian game server without disrupting Meridian-Rift or the existing Cloudflare `bark` tunnel.
+Run the AphelionDMM relay without changing, restarting, or sharing storage with Meridian-Rift. Protocol v2 needs no PostgreSQL, OIDC provider, map storage, account database, backup job, or public origin port. Clients own all durable collaboration data.
 
-The public hostname must be reachable without Cloudflare Access. Users authenticate through the collaboration service's OIDC provider. Sessions remain private and unlisted; joining requires a one-use invitation.
+Read `AGENTS.md`, the agent security/verification guides, the protocol-v2 design, and `client-owned-relay-agent-handoff.md` before acting. Deploy only an explicitly authorized immutable revision. Use PowerShell for Windows host work. Never paste a tunnel token, invitation, group key, identity key, or client database into chat or logs.
 
-## Read first
-
-Work from the AphelionDMM repository root and read:
-
-1. `AGENTS.md`
-2. `docs/agent/security-and-networking.md`
-3. `docs/agent/verification.md`
-4. `docs/superpowers/specs/2026-08-26-public-hosting-and-self-hosting-design.md`
-5. `deploy/production/README.md`
-6. `deploy/production/operations.ps1`
-7. `docs/verification/phase-7-public-hosting-2026-08-26.md`
-
-Use PowerShell for host commands. Preserve unrelated services and files. Do not reset, checkout, merge, commit, push, delete volumes, change firewall policy, or modify protected deployment files without the authority required by `AGENTS.md`.
-
-## Known state and decisions
-
-- The portable production bundle has passed local Compose validation and a real build, health, backup, restore, rollback, and stop lifecycle.
-- `mapping.a13.info` was unoccupied when last inventoried. Recheck immediately before provisioning.
-- The existing remotely managed `bark` tunnel was healthy when last inventoried. Do not edit, restart, retoken, or add this application to it.
-- Use a new remotely managed tunnel dedicated to AphelionDMM. Recommended name: `apheliondmm-mapping`.
-- The published application route is `mapping.a13.info` to `http://hosted:8080`.
-- Do not create a Cloudflare Access application or Access policy for `mapping.a13.info`.
-- Do not expose PostgreSQL or bind hosted port `8080` to a public interface.
-- Deploy exactly one `hosted` replica. Multi-replica operation is unsupported.
-- Google OIDC is the recommended initial provider. The exact callback is `https://mapping.a13.info/v1/auth/complete`.
-- Content Tools, Meridian-Rift code changes, public session discovery, and updater publication are outside this handoff.
-
-## Hard prerequisites
-
-Stop before changing the server unless all of these are satisfied:
-
-- The server operator has completed the interactive authentication needed to administer the server.
-- The repository owner has authorized an immutable AphelionDMM revision or an approved source bundle containing the production changes. The current development changes were still uncommitted and unpushed when this handoff was prepared; do not reproduce them manually on the server.
-- The OIDC provider has issued a production client ID and secret for the exact callback above.
-- A separate encrypted backup destination and retention owner have been selected.
-- The Cloudflare connector can create a dedicated tunnel and DNS route in the `a13.info` zone.
-- The server has enough capacity and an unused Docker subnet for `172.30.90.0/24`, or a replacement subnet has been selected before first start.
-
-Never ask the operator to paste a tunnel token, OIDC secret, database password, bearer credential, invitation, or access URL containing a token into chat. Install secrets directly into ACL-restricted files on the server.
-
-## Phase 1: Read-only server inventory
-
-Record command output with timestamps, but redact usernames or paths if they reveal unrelated infrastructure. Do not use `docker inspect` on existing containers because environment blocks may contain secrets.
-
-```powershell
-$PSVersionTable.PSVersion
-Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture,LastBootUpTime
-Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory
-Get-Volume | Select-Object DriveLetter,FileSystem,HealthStatus,Size,SizeRemaining
-docker version
-docker compose version
-docker info --format 'ServerVersion={{.ServerVersion}} OSType={{.OSType}} Architecture={{.Architecture}} CPUs={{.NCPU}} MemoryBytes={{.MemTotal}} StorageDriver={{.Driver}}'
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-docker network ls
-docker volume ls
-Get-NetTCPConnection -State Listen | Sort-Object LocalPort | Select-Object LocalAddress,LocalPort,OwningProcess
-w32tm /query /status
-Get-Service | Where-Object { $_.Name -match 'docker|cloudflared' } | Select-Object Name,Status,StartType
-```
-
-Then establish, without guessing:
-
-- the service account that runs Docker;
-- the approved installation volume and its free space;
-- the encrypted off-host backup destination and retention period;
-- whether Docker is configured for Linux containers and starts after reboot;
-- whether `172.30.90.0/24` conflicts with any host, VPN, Docker, or game-service network;
-- whether outbound Cloudflare Tunnel connectivity is allowed;
-- which existing monitoring system should receive service alerts.
-
-Save the inventory in a new dated file under `docs/verification/`. Do not record credentials, private map content, database URLs, or full container environment data.
-
-### Inventory stop conditions
-
-Stop and report before installation if:
-
-- Docker or Compose does not meet the requirements in `deploy/production/README.md`;
-- the selected storage is unhealthy or lacks room for the image, PostgreSQL growth, and local backup staging;
-- the Docker subnet conflicts;
-- the only available action would expose a new inbound origin port;
-- the game server or an existing container would need to be stopped;
-- the source revision is dirty, unidentified, or not approved.
-
-## Phase 2: Prepare an immutable deployment checkout
-
-Keep this service separate from the Meridian-Rift checkout and its containers. Prefer an operator-owned path such as `C:\Services\AphelionDMM` if the inventory confirms that volume is appropriate.
-
-1. Obtain the approved source through its authorized Git remote or approved source bundle.
-2. Record `git rev-parse HEAD`, `git status --short`, and `git remote -v` with credentials removed.
-3. Require a clean deployment checkout. Do not deploy from a development working tree with unreviewed changes.
-4. Set these values in `deploy/production/.env`:
-
-```dotenv
-APHELIONDMM_IMAGE_TAG=<approved-release-or-revision-tag>
-APHELIONDMM_BUILD=<approved-build-identifier>
-APHELIONDMM_REVISION=<full-approved-git-revision>
-APHELIONDMM_RUNTIME_UID=65532
-APHELIONDMM_RUNTIME_GID=65532
-```
-
-The identifiers are evidence, not secrets. Use exact approved values rather than the angle-bracket examples.
-
-Initialize the local-only files:
-
-```powershell
-& .\deploy\production\operations.ps1 -Action Initialize
-```
-
-Do not commit `deploy/production/.env`, `config.yaml`, `secrets`, or `backups`.
-
-## Phase 3: Configure OIDC and application secrets
-
-Register a confidential Web OIDC client with:
-
-- issuer: `https://accounts.google.com` for the recommended Google setup;
-- redirect URI: `https://mapping.a13.info/v1/auth/complete`;
-- Authorization Code flow with PKCE;
-- no wildcard redirect URI;
-- only the identity scopes required by the application.
-
-Use this application configuration:
-
-```yaml
-bind_address: "0.0.0.0:8080"
-public_origin: "https://mapping.a13.info"
-trusted_proxy_cidrs:
-  - "172.30.90.0/24"
-database:
-  dsn:
-    file: "/run/secrets/database_dsn"
-oidc:
-  issuer: "https://accounts.google.com"
-  client_id: "<production-client-id>"
-  redirect_url: "https://mapping.a13.info/v1/auth/complete"
-  client_secret:
-    file: "/run/secrets/oidc_client_secret"
-limits:
-  max_connections: 64
-  max_operation_changes: 512
-  max_websocket_message_bytes: 262144
-  max_http_body_bytes: 524288
-  max_snapshot_body_bytes: 268435456
-telemetry:
-  endpoint: ""
-```
-
-Replace only the OIDC client ID and any operator-approved telemetry endpoint. If the Docker subnet changes, update both `deploy/production/compose.yaml` and `trusted_proxy_cidrs` through the protected-file approval process.
-
-Create these files under `deploy/production/secrets`:
-
-- `postgres_password.txt`
-- `database_dsn.txt`
-- `oidc_client_secret.txt`
-- `cloudflare_tunnel_token.txt` after the dedicated tunnel is created
-
-Generate the PostgreSQL password with a cryptographically secure generator. URL-encode it in the DSN:
+## Required topology
 
 ```text
-postgres://apheliondmm:<URL-encoded-password>@postgres:5432/apheliondmm?sslmode=disable
+StrongDMM clients
+    -> https://mapping.a13.info
+    -> Cloudflare edge
+    -> dedicated apheliondmm-mapping tunnel
+    -> http://relay:8080
+    -> stateless apheliondmm-relay
 ```
 
-The password file and DSN password must match. Each secret file contains only the value and an optional final newline.
+- Do not reuse or modify the existing Meridian-Rift tunnel.
+- Do not create a Cloudflare Access application for `mapping.a13.info`.
+- Do not expose relay port 8080 publicly. Use the loopback overlay only for local certification.
+- Do not mount Meridian-Rift files, maps, repositories, Docker socket, or persistent data into the relay.
+- A relay restart intentionally loses rooms. Owners recreate them from local client state.
 
-On Windows, remove inherited access and grant only the deployment operator and Docker-running account the access they require. Start with the repository-documented operator ACL command and verify the effective ACL with `icacls`. Do not weaken ACLs merely to make a container start.
+## Read-only inventory
 
-## Phase 4: Prove local readiness before public routing
+Before installation, record Docker Engine/Compose versions, available CPU/memory/storage, existing container names/networks, listening ports, time synchronization, service-account ownership, and outbound Cloudflare connectivity. Do not inspect existing container environment blocks. Stop if the new Compose project would conflict with or require stopping an existing service.
 
-Validate and build first:
+Confirm that the deployment revision is clean and approved, and that `mapping.a13.info` has no competing DNS route. Record sanitized evidence under `docs/verification/`.
+
+## Operator path
+
+The reviewed relay bundle provides one entry point:
 
 ```powershell
-& .\deploy\production\operations.ps1 -Action Validate -Edge Loopback
-& .\deploy\production\operations.ps1 -Action Build -Edge Loopback
-& .\deploy\production\operations.ps1 -Action StartLoopback
-& .\deploy\production\operations.ps1 -Action Status -Edge Loopback
-Invoke-RestMethod http://127.0.0.1:8080/v1/health/live
-Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
-Invoke-RestMethod http://127.0.0.1:8080/v1/version
+& .\deploy\relay\operations.ps1 -Action Setup
+& .\deploy\relay\operations.ps1 -Action Validate
+& .\deploy\relay\operations.ps1 -Action Build
+& .\deploy\relay\operations.ps1 -Action StartLoopback
+& .\deploy\relay\operations.ps1 -Action Status
+& .\deploy\relay\operations.ps1 -Action Stop
 ```
 
-Record the built image ID and immutable source revision. Confirm PostgreSQL has no published port and hosted port `8080` is bound only to `127.0.0.1`:
+After loopback certification, install the dedicated tunnel token directly at `deploy/relay/secrets/cloudflare_tunnel_token.txt`, then run:
 
 ```powershell
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-$imageTagLine = Get-Content -LiteralPath .\deploy\production\.env | Where-Object { $_ -match '^APHELIONDMM_IMAGE_TAG=' } | Select-Object -First 1
-$imageTag = ($imageTagLine -split '=', 2)[1].Trim()
-docker image inspect "apheliondmm-hosted:$imageTag" --format '{{.Id}}'
+& .\deploy\relay\operations.ps1 -Action StartCloudflare
+& .\deploy\relay\operations.ps1 -Action Status
 ```
 
-Do not proceed unless both health endpoints report success, `/v1/version` matches the approved build and revision, logs contain no secrets, and no public origin port was opened.
+The protected files were explicitly confirmed and locally exercised on 2026-08-26. Deploy the reviewed bundle from an authorized immutable revision; do not reproduce or improvise it on the server.
 
-Stop the loopback deployment before switching overlays:
+## Cloudflare route
 
-```powershell
-& .\deploy\production\operations.ps1 -Action Stop -Edge Loopback
-```
-
-## Phase 5: Create the dedicated public tunnel
-
-Use the Cloudflare control plane to create a new remotely managed tunnel named `apheliondmm-mapping`. Do not reuse or modify `bark`.
-
-Cloudflare's current documentation is authoritative for dashboard locations and API fields:
-
-- [Create a remotely managed tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/)
-- [Published application routing](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/)
-- [Tunnel token handling](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/)
-- [`--token-file` run parameter](https://developers.cloudflare.com/tunnel/advanced/run-parameters/#token-file)
-
-Configure exactly one published application:
+Create a dedicated remotely managed tunnel, recommended name `apheliondmm-mapping`, with one public hostname:
 
 | Setting | Value |
 | --- | --- |
-| Public hostname | `mapping.a13.info` |
-| Service type | HTTP |
-| Service URL | `http://hosted:8080` |
-| Cloudflare Access | None |
+| Hostname | `mapping.a13.info` |
+| Service | `http://relay:8080` |
+| Cloudflare Access | Disabled |
 
-Adding the published route through the dashboard normally creates the tunnel CNAME automatically. Confirm that the final proxied record resolves to the new tunnel's `<UUID>.cfargotunnel.com` target and that no competing `A`, `AAAA`, or `CNAME` record exists.
+The public endpoint must accept ordinary client WebSockets without Cloudflare account membership. Reconfirm the pre-existing Meridian tunnel is unchanged.
 
-Retrieve the token without printing it into terminal history or agent output, and place it directly in `deploy/production/secrets/cloudflare_tunnel_token.txt`. Treat anyone holding this token as able to run a connector for the tunnel. Record only the tunnel name and UUID in evidence.
+## Certification
 
-Validate and start:
-
-```powershell
-& .\deploy\production\operations.ps1 -Action Validate -Edge Cloudflare
-& .\deploy\production\operations.ps1 -Action StartCloudflare
-& .\deploy\production\operations.ps1 -Action Status -Edge Cloudflare
-```
-
-Confirm that the new tunnel reports healthy connections. Reconfirm that `bark` is unchanged and that no Cloudflare Access application exists for `mapping.a13.info`.
-
-## Phase 6: Public certification
-
-Run these from a different network if possible:
+From loopback, then a separate external network, verify:
 
 ```powershell
+Invoke-RestMethod http://127.0.0.1:8080/v1/health/live
+Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
+Invoke-RestMethod http://127.0.0.1:8080/v1/version
+
 Invoke-RestMethod https://mapping.a13.info/v1/health/live
 Invoke-RestMethod https://mapping.a13.info/v1/health/ready
 Invoke-RestMethod https://mapping.a13.info/v1/version
 ```
 
-Then use the current `dst\StrongDMM.exe` test artifact and `docs/testing/multiplayer-online-pilot-guide.md` to verify:
+Then follow the client-owned relay human test guide with two computers on separate networks. Inspect relay logs and metrics for map text, paths, display names, invitations, capabilities, group keys, and private keys; expected disclosure is zero.
 
-1. opening the hosted sign-in uses `https://mapping.a13.info` by default;
-2. no Cloudflare Access login or client software is required;
-3. OIDC sign-in returns successfully to the desktop callback flow;
-4. an authenticated owner can create a private session;
-5. a second authenticated identity can redeem a one-use editor invitation;
-6. two clients edit, reconnect, and converge;
-7. owner and editor names propagate correctly;
-8. a hosted-service restart recovers acknowledged state.
+Restart only the relay. The owner must reconnect first and recreate the room, followed by participants. Confirm the final client revisions and map hashes match. No restore operation should exist or be required.
 
-If the endpoint displays a Cloudflare Access interstitial, returns a tunnel `1016` error, redirects to a different origin, or presents a certificate/hostname error, stop the pilot and correct routing before inviting users.
+## Update and rollback
 
-## Phase 7: Backup, restore, and rollback rehearsal
+`operations.ps1 -Action Update` should build or pull the authorized image, replace only this Compose project's relay, wait for health, and retain the prior image tag for manual rollback. A bad public route is rolled back by disabling only the new `mapping.a13.info` route. A bad relay release is rolled back to the recorded prior image. Never delete client data: it is not on this server.
 
-Create a backup with the shipped operator entry point and move the completed dump to the approved encrypted off-host destination:
+## Evidence and handback
 
-```powershell
-& .\deploy\production\operations.ps1 -Action Backup -Edge Cloudflare
-```
+Record the approved revision, image ID/digest, non-secret relay-config SHA-256, Docker versions, tunnel name/UUID, DNS route, health/version timestamps, external WebSocket result, relay-restart result, privacy scan, and confirmation that Meridian-Rift and its tunnel were unchanged.
 
-Verify its size, timestamp, encryption-at-rest status, retention location, and restore ownership. Do not infer recoverability from backup creation alone.
+Report one of:
 
-Before accepting the pilot, rehearse restore with explicit confirmation during a maintenance window:
+- **Ready for public two-network pilot**
+- **Public route staged, certification incomplete**
+- **Not deployed**, with the exact prerequisite or stop condition
 
-```powershell
-& .\deploy\production\operations.ps1 -Action Restore -Edge Cloudflare -BackupFile <absolute-approved-backup-path> -ConfirmRestore
-```
+## Legacy protocol-v1 material
 
-Retain the first known-good hosted image under an operator-recorded tag. Rehearse rollback during a maintenance window:
-
-```powershell
-& .\deploy\production\operations.ps1 -Action Rollback -Edge Cloudflare -ImageTag <retained-known-good-tag>
-```
-
-Replace the angle-bracket examples with the verified local path and tag. After each operation, require container health plus public live, ready, version, OIDC, and reconnect checks.
-
-## Phase 8: Load, fault, and observability gates
-
-Follow `deploy/production/README.md` and `docs/verification/phase-7-load-tooling-2026-08-25.md` for the hosted 25-editor profile. Use disposable OIDC identities and an ACL-restricted editor-token file. Delete that file and revoke the identities after the test.
-
-Record:
-
-- acknowledgement p50, p95, and p99;
-- convergence and final map hashes;
-- reconnect and conflict counts;
-- WebSocket connection churn;
-- PostgreSQL health and storage growth;
-- slow-consumer and sustained-presence behavior;
-- database interruption and recovery;
-- authentication failures without credential material.
-
-Configure or document the selected telemetry destination and alert owner before the named-user pilot. At minimum, cover public readiness, hosted process health, connection churn, operation latency, PostgreSQL health/storage, tunnel status, and authentication failure rate.
-
-## Evidence package required from the deployment agent
-
-Create or update `docs/verification/phase-7-public-hosting-2026-08-26.md` with:
-
-- server OS, CPU, memory, storage, time synchronization, Docker Engine, and Compose versions;
-- approved source revision and clean-tree evidence;
-- hosted image tag and image ID;
-- SHA-256 of `config.yaml` with confirmation that it contains no secrets;
-- tunnel name and UUID, public route, DNS result, and tunnel health;
-- confirmation that `bark` was unchanged and no Access application protects `mapping.a13.info`;
-- health/version output and timestamps;
-- OIDC, session, invitation, two-client, reconnect, and restart outcomes;
-- backup location category, dump hash, restore outcome, retained rollback tag, and rollback outcome;
-- hosted load/fault metrics and exceptions;
-- telemetry destination category and alert owner;
-- final go/no-go recommendation for the named-user pilot.
-
-Never record tunnel tokens, OIDC secrets or codes, bearer/session credentials, invitations, database passwords or DSNs, Cloudflare Access URLs containing tokens, private map content, or full unredacted logs.
-
-## Rollback and incident rules
-
-- If public routing fails but the application is healthy locally, remove or disable only the new `mapping.a13.info` published route. Do not alter `bark`.
-- If the new service is unhealthy, stop only the `apheliondmm-mapping` Compose project. Do not delete its PostgreSQL volume during incident response.
-- If an application release regresses, use the retained known-good image tag through `operations.ps1 -Action Rollback`.
-- If a tunnel token is exposed, rotate that dedicated tunnel token and replace its secret file. Do not paste the replacement token into an issue or chat.
-- If an OIDC secret or session credential is exposed, revoke it at the provider before continuing.
-- If durable state may be inconsistent, stop new testing, preserve both clients' redacted logs and relevant database backup, and do not run destructive repair commands without an approved recovery plan.
-
-## Final handback status
-
-Report one of these exact states:
-
-- **Ready for named-user pilot:** every public, recovery, load/fault, observability, and security gate above has evidence.
-- **Public endpoint staged, certification incomplete:** routing is live but one or more non-destructive acceptance gates remain; list them.
-- **Not deployed:** a prerequisite or stop condition blocked the deployment; state the condition and the smallest user action needed.
-
-Do not report general production completion. Production updater signing ownership and multi-replica fanout remain separate future gates.
+The older `deploy/production` PostgreSQL/OIDC stack and its backup/restore procedure apply only to server-authoritative protocol v1. Preserve them as legacy evidence, but do not deploy them for the protocol-v2 relay.

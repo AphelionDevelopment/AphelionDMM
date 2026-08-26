@@ -1,6 +1,6 @@
 # AphelionDMM Authoritative Multiplayer Design
 
-**Status:** Approved planning baseline  
+**Status:** Historical protocol-v1 baseline; superseded for online protocol v2 by [`2026-08-26-client-owned-relay-design.md`](2026-08-26-client-owned-relay-design.md)
 **Date:** 2026-08-24  
 **Reviewed source:** AphelionDMM local revision `5241698a`  
 **Audience:** AphelionDMM, Meridian-Rift, Meridian-MCP, and aphelion-content-tools maintainers

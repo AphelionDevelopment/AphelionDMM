@@ -32,9 +32,8 @@ type app interface {
 	DoExit()
 	// APHELION EDIT ADDITION START - COLLABORATION
 	DoCreateLocalCollaborationSession()
-	DoSignInHostedCollaboration()
-	DoCreateHostedCollaborationSession()
-	DoSignOutHostedCollaboration()
+	DoCreateOnlineCollaborationSession()
+	DoOpenCollaborationSettings()
 	DoJoinCollaborationSession()
 	DoLeaveCollaborationSession()
 	DoOpenCollaborationPanel()
@@ -83,7 +82,7 @@ type app interface {
 	HasActiveMap() bool
 	// APHELION EDIT ADDITION START - COLLABORATION
 	HasActiveCollaboration() bool
-	HasHostedCollaborationSignIn() bool
+	OnlineCollaborationAvailable() bool
 	// APHELION EDIT ADDITION END
 
 	PathsFilter() *dm.PathsFilter
@@ -220,21 +219,18 @@ func (m *Menu) Process() {
 			w.MenuItem("Start Local Session", m.app.DoCreateLocalCollaborationSession).
 				IconEmpty().
 				Enabled(m.app.HasActiveMap() && !m.app.HasActiveCollaboration()),
-			w.MenuItem("Sign In to Hosted Service", m.app.DoSignInHostedCollaboration).
+			w.MenuItem("Start Online Session", m.app.DoCreateOnlineCollaborationSession).
 				IconEmpty().
-				Enabled(!m.app.HasHostedCollaborationSignIn() && !m.app.HasActiveCollaboration()),
-			w.MenuItem("Start Hosted Session", m.app.DoCreateHostedCollaborationSession).
-				IconEmpty().
-				Enabled(m.app.HasActiveMap() && m.app.HasHostedCollaborationSignIn() && !m.app.HasActiveCollaboration()),
+				Enabled(m.app.HasActiveMap() && m.app.OnlineCollaborationAvailable() && !m.app.HasActiveCollaboration()),
 			w.MenuItem("Join Session", m.app.DoJoinCollaborationSession).
 				IconEmpty().
 				Enabled(m.app.HasActiveMap() && !m.app.HasActiveCollaboration()),
 			w.MenuItem("Leave Session", m.app.DoLeaveCollaborationSession).
 				IconEmpty().
 				Enabled(m.app.HasActiveCollaboration()),
-			w.MenuItem("Sign Out of Hosted Service", m.app.DoSignOutHostedCollaboration).
+			w.MenuItem("Collaboration Settings", m.app.DoOpenCollaborationSettings).
 				IconEmpty().
-				Enabled(m.app.HasHostedCollaborationSignIn() && !m.app.HasActiveCollaboration()),
+				Enabled(!m.app.HasActiveCollaboration()),
 		}),
 		// APHELION EDIT ADDITION END
 

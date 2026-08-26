@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/aphelion/collab/protocolv2"
 )
 
 var (
@@ -26,12 +27,14 @@ type ProjectReplacementPermit struct {
 }
 
 type Invitation struct {
-	BaseURL        string    `json:"base_url"`
-	Origin         string    `json:"origin"`
-	SessionID      string    `json:"session_id"`
-	Token          string    `json:"-"`
-	TokenExpiresAt time.Time `json:"-"`
-	Hosted         bool      `json:"hosted,omitempty"`
+	BaseURL        string                 `json:"base_url"`
+	Origin         string                 `json:"origin"`
+	SessionID      string                 `json:"session_id"`
+	Token          string                 `json:"-"`
+	TokenExpiresAt time.Time              `json:"-"`
+	Hosted         bool                   `json:"hosted,omitempty"`
+	ProtocolV2     *protocolv2.Invitation `json:"-"`
+	protocolV2URI  string
 }
 
 func (invitation Invitation) String() string {
@@ -39,6 +42,12 @@ func (invitation Invitation) String() string {
 }
 
 func (invitation Invitation) validate() error {
+	if invitation.ProtocolV2 != nil {
+		if invitation.protocolV2URI == "" || invitation.ProtocolV2.Version != protocolv2.Version {
+			return fmt.Errorf("protocol-v2 collaboration invitation is incomplete")
+		}
+		return nil
+	}
 	if invitation.BaseURL == "" || invitation.Origin == "" || invitation.SessionID == "" || invitation.Token == "" {
 		return fmt.Errorf("collaboration invitation is incomplete")
 	}

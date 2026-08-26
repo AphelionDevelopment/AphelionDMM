@@ -1,6 +1,13 @@
 # Multiplayer implementation roadmap
 
-> **Current status (2026-08-25):** Automated implementation and local verification are complete through the pre-human-test boundary, excluding Aphelion Content Tools by explicit direction. The authoritative status and remaining gates are in `2026-08-25-multiplayer-human-test-readiness.md`. The original phase checklists below are retained as implementation history; an unchecked historical red-test or conditional commit step is not automatically current backlog.
+> **Current status (2026-08-26):** The active online architecture is the client-owned protocol-v2 relay in `2026-08-26-client-owned-relay.md`. The authoritative remaining-work ledger is `2026-08-26-final-multiplayer-progression-sheet.md`. The phases below are retained as protocol-v1 and shared-foundation implementation history. Content Tools remains excluded by explicit direction.
+
+## Active protocol-v2 path
+
+1. Deploy the locally verified stateless relay at `mapping.a13.info` without Cloudflare Access.
+2. Run [`client-owned-relay-human-test-guide.md`](../../testing/client-owned-relay-human-test-guide.md) on two computers and separate networks.
+3. Complete the deferred desktop owner-transfer flow before release acceptance.
+4. Prepare a separate post-pilot cutover plan only after that evidence passes.
 
 Execute these plans in order. Each phase is independently reviewable and has an explicit acceptance boundary.
 

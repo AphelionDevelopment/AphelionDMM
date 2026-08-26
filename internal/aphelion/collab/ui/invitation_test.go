@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"strings"
 	"testing"
 	"time"
+
+	"sdmm/internal/aphelion/collab/protocolv2"
 )
 
 func TestEncodeParseInvitationRoundTripWithoutUsingString(t *testing.T) {
@@ -28,6 +32,32 @@ func TestEncodeParseInvitationRoundTripWithoutUsingString(t *testing.T) {
 	}
 	if parsed != want {
 		t.Fatalf("parsed invitation = %#v, want %#v", parsed, want)
+	}
+}
+
+func TestParseInvitationAcceptsSignedProtocolV2URI(t *testing.T) {
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x21}, ed25519.SeedSize))
+	var owner protocolv2.ActorKey
+	copy(owner[:], privateKey.Public().(ed25519.PublicKey))
+	v2 := protocolv2.Invitation{Version: 2, RelayURL: "https://mapping.a13.info", RoomID: protocolv2.RoomID{1}, Role: protocolv2.RoleEditor, Admission: protocolv2.Capability{2}, GroupKey: protocolv2.GroupKey{3}, OwnerPublicKey: owner, DocumentID: "01890f3e-7b5c-7abc-8def-0123456789ab", EnvironmentHash: strings.Repeat("a", 64), ManifestSHA256: protocolv2.Digest{4}, IssuedAt: time.Now().Add(-time.Minute).UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	encoded, err := protocolv2.EncodeInvitation(v2, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := ParseInvitation(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ProtocolV2 == nil || parsed.ProtocolV2.RoomID != v2.RoomID || parsed.ProtocolV2.Role != v2.Role {
+		t.Fatalf("parsed protocol-v2 invitation = %#v", parsed.ProtocolV2)
+	}
+	roundTrip, err := EncodeInvitation(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip != encoded {
+		t.Fatalf("protocol-v2 round trip changed invitation")
 	}
 }
 

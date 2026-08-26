@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+
+	"sdmm/internal/aphelion/collab/protocolv2"
 )
 
-const maxEncodedInvitationBytes = 4096
+const maxEncodedInvitationBytes = 8192
 
 const hostedInvitationFormatVersion = 1
 
@@ -34,6 +37,9 @@ func EncodeInvitation(invitation Invitation) (string, error) {
 	if err := invitation.validate(); err != nil {
 		return "", err
 	}
+	if invitation.ProtocolV2 != nil {
+		return invitation.protocolV2URI, nil
+	}
 	data, err := json.Marshal(encodedInvitation{
 		FormatVersion: func() int {
 			if invitation.Hosted {
@@ -56,6 +62,13 @@ func EncodeInvitation(invitation Invitation) (string, error) {
 func ParseInvitation(value string) (Invitation, error) {
 	if len(value) == 0 || len(value) > maxEncodedInvitationBytes {
 		return Invitation{}, fmt.Errorf("collaboration invitation size is invalid")
+	}
+	if strings.HasPrefix(value, "apheliondmm://") {
+		parsed, err := protocolv2.ParseInvitation(value, time.Now().UTC())
+		if err != nil {
+			return Invitation{}, err
+		}
+		return Invitation{BaseURL: parsed.RelayURL, Origin: parsed.RelayURL, SessionID: fmt.Sprintf("%x", parsed.RoomID), ProtocolV2: &parsed, protocolV2URI: value}, nil
 	}
 	decoder := json.NewDecoder(bytes.NewBufferString(value))
 	decoder.DisallowUnknownFields()

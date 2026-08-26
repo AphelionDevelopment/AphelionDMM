@@ -1,58 +1,33 @@
 # Security and networking
 
-## Trust boundary
+## Protocol-v2 trust boundary
 
-Treat every client message, URL, header, repository identifier, map payload, and reconnect cursor as hostile. The server is authoritative and validates authorization, bounds, hashes, revisions, operation form, and message size before mutation.
+Treat every endpoint, header, frame, invitation, operation, profile, and reconnect cursor as hostile. The owner validates application semantics. The relay validates only versioned framing, signatures needed for routing controls, room membership, capability digests, bounds, sequence order, and rate limits.
 
-The collaboration protocol may carry document identifiers and map operations. It must not carry:
-
-- arbitrary local paths;
-- shell commands or arguments;
-- executable locations;
-- access tokens, private keys, or repository credentials;
-- unrestricted URLs for server-side fetching;
-- raw SQL or storage implementation details.
+Application messages use the protocol-v2 binary envelope, Ed25519 signatures, and XChaCha20-Poly1305 encryption with the session group key. The relay must remain payload-opaque and must not receive private keys, group keys, raw invitations, map content, file paths, repository credentials, shell commands, SQL, or executable locations.
 
 ## Network defaults
 
-- Bind to loopback unless a human explicitly enables a network deployment.
-- Use `wss://` and HTTPS outside loopback.
-- Validate WebSocket `Origin` against a configured allowlist before upgrade.
-- Authenticate the HTTP request before WebSocket upgrade.
-- Authorize each session join and durable operation; connection authentication alone is insufficient.
-- Set read, write, idle, handshake, and shutdown deadlines.
-- Apply byte limits before JSON decoding and collection-count limits after decoding.
-- Reject unsupported protocol versions before joining a session.
-- Rate-limit durable operations, joins, reconnects, and presence independently.
-- Coalesce lossy presence updates. Never let presence backpressure durable acknowledgements.
-- Use structured logs with actor/session identifiers but exclude map content, tokens, and sensitive headers.
+- Clients default to `https://mapping.a13.info` and require HTTPS/WSS outside loopback.
+- A user-configured relay persists locally. An invitation that names a different endpoint requires explicit confirmation.
+- The public relay is reachable without Cloudflare Access, OIDC, or a user account. Possession of a valid invitation is the admission path.
+- The origin service binds only to its private container network or loopback overlay. Cloudflare terminates public TLS.
+- Trust `CF-Connecting-IP` or `X-Forwarded-For` only when the direct peer is inside an explicitly configured proxy CIDR.
+- Bound handshake, frame, connection, room, and byte rates before expensive decoding or forwarding.
+- Use binary WebSocket frames and disable compression to avoid cross-message compression risks.
+- Shutdown and relay restart may drop rooms; clients retain all durable state.
 
-## Identity and authorization
+## Local secrets and identity
 
-Embedded loopback mode uses a short-lived, single-use launch token transferred outside URLs. Hosted mode uses OIDC Authorization Code with PKCE and validates issuer, audience, signature, expiry, and nonce. Roles are viewer, editor, and owner:
+Installation and session keys live behind `identity.Manager` and the platform secret store. SQLite stores opaque secret references, never secret bytes. Do not log local data paths because they may expose account or machine names. Invitations are secrets: clear UI input after parsing and never include the raw value in errors, logs, reports, screenshots, or test fixtures intended for publication.
 
-- viewer: snapshot and presence access;
-- editor: viewer rights plus durable map operations and actor-scoped undo;
-- owner: editor rights plus session lifecycle, role administration, and exclusive maintenance operations.
+## Relay operations
 
-The server derives the actor identity from the authenticated principal. Clients cannot assert another actor ID.
+The relay needs one non-secret YAML configuration. A Cloudflare deployment additionally needs only a tunnel-token file installed directly on the host. It needs no database, map volume, OIDC secret, backup job, server-side user store, or privileged filesystem access. Run nonroot with a read-only root filesystem and dropped capabilities.
 
-## Filesystem and process safety
+Public health/version responses reveal service and supported protocol versions only. Metrics expose aggregate active connections and room count. Structured logs may include bounded build/revision and network diagnostics but never client plaintext or credential material.
 
-- Resolve configured roots once, canonicalize them, and reject targets outside those roots.
-- Collaboration messages refer to server-side document IDs, not filesystem paths.
-- Stage output in the destination directory, flush, validate, then atomically replace the target.
-- Preserve the old file if serialization, validation, flush, or replacement fails.
-- Do not invoke shells. External adapters use a fixed executable and fixed subcommand set from trusted local configuration.
-- Never expose updater or integration credentials to browser code.
+## Protocol-v1 legacy boundary
 
-## Dependency and update policy
-
-Pin protocol, database, and security-sensitive dependencies. Review advisories before upgrades. The updater must have request timeouts, response-size limits, TLS verification, signed metadata/artifacts, and a non-destructive rollback path.
-
-Embedded SQLite must bundle a release containing the WAL-reset repair, at least SQLite 3.51.3. Hosted persistence uses PostgreSQL. Database choice does not alter operation semantics.
-
-## Abuse and failure handling
-
-Malformed data returns a bounded error and leaves state unchanged. Repeated violations close the connection. Panics are isolated from the document owner loop, recorded without secrets, and do not acknowledge an operation. Shutdown stops new joins, drains acknowledged durable writes, snapshots eligible documents, and closes connections with a reason.
+The legacy hosted service uses OIDC, PostgreSQL, server-side document authority, and backup/restore procedures. Those requirements apply only to protocol v1. Keep its code and operational material labeled so an operator does not install that stack for a protocol-v2 relay.
 

@@ -356,12 +356,14 @@ func (a *app) DoJoinCollaborationSession() {
 		return
 	}
 	var encodedInvitation string
+	joinDisplayName := "Participant"
 	dial.Open(dial.TypeCustom{
 		Title:       "Join Collaboration Session",
 		CloseButton: true,
 		Layout: w.Layout{
 			w.Text("Paste the invitation shared by the session owner."),
 			w.InputTextWithHint("##collaboration-invitation", "Invitation", &encodedInvitation).Width(-1),
+			w.InputTextWithHint("##collaboration-join-name", "Display name", &joinDisplayName).Width(-1),
 			w.Button("Join Session", func() {
 				if a.CurrentEditor() != selectedEditor || a.HasActiveCollaboration() {
 					util.ShowErrorDialog("Unable to join collaboration: the active map or session changed")
@@ -373,14 +375,36 @@ func (a *app) DoJoinCollaborationSession() {
 					util.ShowErrorDialog("Unable to join collaboration: " + err.Error())
 					return
 				}
+				displayName := strings.TrimSpace(joinDisplayName)
+				if displayName == "" {
+					util.ShowErrorDialog("Unable to join collaboration: display name is required")
+					return
+				}
 				imgui.CloseCurrentPopup()
-				go a.joinCollaborationSession(invitation, selectedEditor)
+				if invitation.ProtocolV2 != nil && invitation.ProtocolV2.RelayURL != a.collaborationConfig().RelayURL {
+					window.RunLater(func() {
+						dial.Open(dial.TypeCustom{Title: "Confirm Collaboration Relay", CloseButton: true, Layout: w.Layout{
+							w.Text("This invitation uses a different relay than your configured default:"),
+							w.Text(invitation.ProtocolV2.RelayURL),
+							w.Button("Join Using This Relay", func() {
+								imgui.CloseCurrentPopup()
+								go a.joinCollaborationSession(invitation, selectedEditor, displayName)
+							}),
+						}})
+					})
+					return
+				}
+				go a.joinCollaborationSession(invitation, selectedEditor, displayName)
 			}),
 		},
 	})
 }
 
-func (a *app) joinCollaborationSession(invitation collabui.Invitation, selectedEditor *editor.Editor) {
+func (a *app) joinCollaborationSession(invitation collabui.Invitation, selectedEditor *editor.Editor, displayName string) {
+	if invitation.ProtocolV2 != nil {
+		a.joinOnlineCollaboration(selectedEditor, *invitation.ProtocolV2, displayName)
+		return
+	}
 	timeout := collaborationActionTimeout
 	if invitation.Hosted {
 		timeout = hostedCollaborationActionTimeout
@@ -413,6 +437,14 @@ func (a *app) joinCollaborationSession(invitation collabui.Invitation, selectedE
 }
 
 func (a *app) DoCopyCollaborationInvitation(role collabui.InvitationRole, displayName string) {
+	if a.onlineCollaboration != nil {
+		go func() {
+			if err := a.createOnlineInvitation(role); err != nil {
+				window.RunLater(func() { util.ShowErrorDialog("Unable to create online collaboration invitation: " + err.Error()) })
+			}
+		}()
+		return
+	}
 	client := a.collaborationClient
 	if client == nil || !a.HasActiveCollaboration() {
 		return
@@ -443,6 +475,14 @@ func (a *app) DoCopyCollaborationInvitation(role collabui.InvitationRole, displa
 }
 
 func (a *app) DoUpdateCollaborationDisplayName(displayName string) {
+	if a.onlineCollaboration != nil {
+		go func() {
+			if err := a.updateOnlineDisplayName(strings.TrimSpace(displayName)); err != nil {
+				window.RunLater(func() { util.ShowErrorDialog("Unable to update collaboration display name: " + err.Error()) })
+			}
+		}()
+		return
+	}
 	client := a.collaborationClient
 	if client == nil || !a.HasActiveCollaboration() {
 		return
@@ -459,6 +499,20 @@ func (a *app) DoUpdateCollaborationDisplayName(displayName string) {
 }
 
 func (a *app) DoLeaveCollaborationSession() {
+	if a.onlineCollaboration != nil {
+		if a.collaborationEditor != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+			err := a.collaborationEditor.DetachCollaborationExecutor(ctx)
+			cancel()
+			if err != nil {
+				util.ShowErrorDialog("Unable to leave collaboration: " + err.Error())
+				return
+			}
+		}
+		a.stopOnlineCollaboration()
+		a.collaborationEditor = nil
+		return
+	}
 	if a.collaborationController == nil || !a.collaborationController.Active() {
 		return
 	}
@@ -485,6 +539,10 @@ func (a *app) DoLeaveCollaborationSession() {
 }
 
 func (a *app) DoRetryCollaborationSession() {
+	if a.onlineCollaboration != nil {
+		a.retryOnlineCollaboration()
+		return
+	}
 	client := a.collaborationClient
 	if client == nil || !a.HasActiveCollaboration() {
 		return
@@ -552,7 +610,7 @@ func (a *app) DoResolveCollaborationConflict(operationID model.OperationID, acti
 }
 
 func (a *app) HasActiveCollaboration() bool {
-	return a.collaborationController != nil && a.collaborationController.Active()
+	return a.onlineCollaboration != nil || a.collaborationController != nil && a.collaborationController.Active()
 }
 
 func (a *app) HasHostedCollaborationSignIn() bool {

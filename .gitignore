@@ -36,3 +36,8 @@ dst/
 /deploy/production/config.yaml
 /deploy/production/secrets/
 /deploy/production/backups/
+
+# Local stateless-relay configuration and tunnel secret
+/deploy/relay/.env
+/deploy/relay/relay.yaml
+/deploy/relay/secrets/

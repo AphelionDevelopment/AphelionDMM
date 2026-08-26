@@ -1,0 +1,20 @@
+version: 1
+public_origin: https://mapping.a13.info
+bind_address: 0.0.0.0:8080
+trusted_proxy_cidrs:
+  - 172.30.91.0/24
+room_idle_ttl: 30m
+limits:
+  max_rooms: 1000
+  max_connections: 4000
+  max_connections_per_room: 32
+  max_message_bytes: 1048576
+  max_room_bytes_per_second: 8388608
+  connect_burst: 120
+  connect_window: 1m
+  message_burst: 600
+  message_window: 1s
+observability:
+  log_level: info
+  metrics_bind_address: 127.0.0.1:9090
+

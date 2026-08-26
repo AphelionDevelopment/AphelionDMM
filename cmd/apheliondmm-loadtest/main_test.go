@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,15 @@ func TestLoadScenarioReadsRecordedPilotSeed(t *testing.T) {
 	}
 	if scenario.Config.Seed != 20260825 || scenario.Config.Clients != 25 || scenario.ExpectedRevision != 250 {
 		t.Fatalf("scenario = %#v", scenario)
+	}
+}
+
+func TestRelayBundleModeDoesNotRequireHostedOwnerToken(t *testing.T) {
+	t.Setenv("APHELIONDMM_LOAD_OWNER_TOKEN", "")
+	var output bytes.Buffer
+	code := run([]string{"-relay-bundle", filepath.Join(t.TempDir(), "missing.json")}, &output, &output)
+	if code == 0 || strings.Contains(output.String(), "APHELIONDMM_LOAD_OWNER_TOKEN") {
+		t.Fatalf("run() = %d, output = %s", code, output.String())
 	}
 }
 

@@ -76,3 +76,14 @@ func TestBuildViewModelShowsReconnectControlWhileReconnecting(t *testing.T) {
 		t.Fatalf("reconnect capabilities after exhausted retries = %#v", view)
 	}
 }
+
+func TestBuildViewModelBlocksMutationAndShowsReplicaRecovery(t *testing.T) {
+	view := BuildViewModel(SessionStatus{Role: "editor", State: client.StateCaughtUp, Paused: true, PendingReady: 2, PendingConflicting: 1})
+	if view.CanEdit || !view.Paused || view.SyncLabel != "Owner offline" || view.PendingReady != 2 || view.PendingConflicting != 1 {
+		t.Fatalf("paused replica view = %#v", view)
+	}
+	view = BuildViewModel(SessionStatus{Role: "owner", State: client.StateCaughtUp, Desynchronized: true, RecoveryAction: "request_snapshot"})
+	if view.CanEdit || !view.Desynchronized || view.SyncLabel != "Desynchronized" || view.RecoveryAction != "request_snapshot" {
+		t.Fatalf("desynchronized replica view = %#v", view)
+	}
+}

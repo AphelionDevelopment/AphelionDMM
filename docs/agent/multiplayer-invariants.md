@@ -1,60 +1,34 @@
 # Multiplayer invariants
 
-These rules are correctness requirements, not implementation preferences.
+## Protocol v2: client-owned relay sessions
 
-## Authoritative state
+1. Exactly one connected owner client orders and validates durable mutations.
+2. Every accepted operation is durably appended by the owner before broadcast and receives one monotonically increasing revision.
+3. Every participant persists its own acknowledged replica. The relay persists none of it.
+4. Duplicate operation IDs are idempotent; explicit before-values prevent silent overwrites.
+5. A participant never promotes speculative or pending work to acknowledged state without an owner acceptance.
+6. Pending work survives locally but is not automatically resent after reconnect. The user must review it.
+7. Snapshot or contiguous replay installation is transactional and must match the signed document and environment context.
+8. Owner loss pauses durable editing. Relay loss does not change the last acknowledged client state.
+9. A relay restart requires room/admission recreation by the owner, then participant resynchronization; it requires no database restore.
+10. Ownership transfer is atomic only after dual signatures over the exact resulting manifest and relay acknowledgement while both actors are connected.
 
-1. One server-side document owner serializes every durable mutation.
-2. Each accepted operation receives exactly one monotonically increasing document revision.
-3. An acknowledgement is sent only after the operation is durably recorded at the configured durability level.
-4. Duplicate `(document_id, operation_id)` delivery returns the original result and never reapplies the operation.
-5. Applying the accepted log to the same validated snapshot produces the same canonical map hash on every supported platform.
+## Operations and conflicts
 
-## Operations
+Durable operations contain protocol, document, actor and operation IDs, base revision/hash, environment hash, kind, explicit changes, and replacement preconditions. Validation is all-or-nothing. Non-overlapping edits may merge by owner order; conflicting stale values reject with bounded authoritative context. Undo and redo are new actor-scoped operations with ordinary preconditions, never history rewinds.
 
-Every durable operation contains:
+## Identity, profiles, and roles
 
-- protocol version;
-- document, actor, and operation identifiers;
-- base revision;
-- environment hash and the canonical map hash at the named base revision;
-- explicit typed changes;
-- preconditions for values being replaced;
-- an operation kind with bounded payload rules.
+Actors authenticate protocol messages with installation keys. Invitations carry signed owner/session/document/environment context plus a short-lived capability and group key. The relay stores only the capability digest and binding. Roles are owner, editor, and viewer. Viewer mutation is rejected locally and authoritatively. Profile sequences must increase; display names are bounded UTF-8 values and are not identity keys.
 
-The server validates the entire operation before applying any part. A stale base revision may still merge when its base hash is authentic and all explicit value preconditions remain valid. Partial acceptance is not permitted.
+## Presence and relay state
 
-Operations describe domain changes, not UI gestures. A brush drag is converted to deterministic tile changes before submission. The accepted record contains the normalized change set used by the server.
-
-## Conflict behavior
-
-- Non-overlapping tile or property changes may be accepted in server order.
-- A precondition mismatch rejects the conflicting change and returns current authoritative values.
-- Map resize, environment replacement, import, and export-finalization are exclusive maintenance operations.
-- Clients reconcile from accepted operations; they never declare local speculative state authoritative.
-- A reconnect starts from an acknowledged revision and receives a snapshot or contiguous replay sufficient to reconstruct current state.
-- If the acknowledged revision predates retained replay history, the server sends `snapshot_required` and closes without a partial replay. The client fetches the authenticated HTTP snapshot, installs only a compatible non-rollback baseline with no pending operations, and reconnects again from the fetched revision.
-- Invitation and join credentials are redeemed on successful WebSocket join. The authenticated `joined` response supplies a short-lived session-and-actor-scoped resumption credential held only in memory and rotated on every successful reconnect. Authentication or protocol incompatibility stops retries and clears that credential.
-
-## Undo and redo
-
-Undo is a new inverse operation authored by the requesting actor. It names the target operation and carries preconditions proving the target values are still safely reversible. It cannot erase history, rewind other actors, or move a shared history pointer. Redo is a new forward operation subject to the same validation.
-
-## Presence
-
-Cursor, selection, viewport, tool preview, typing, and user status are ephemeral. They are not written to the durable operation log, do not affect map hashes, may be dropped or coalesced, and expire after disconnect or timeout.
-
-The server advertises the permitted client publication interval in the authenticated `joined` message. Protocol v1 requires `presence_interval_ms` in the inclusive range 16 through 5000. Clients publish no faster than that interval and continue using the separate lossy presence queue; this limit never applies backpressure to durable operations.
+Presence is ephemeral, lossy, bounded, and excluded from map hashes and durable logs. Relay room, connection, rate-limit, and admission state is disposable. Metrics expose aggregate connection/room counts only. Relay logs must not contain map content, paths, names, invitations, capabilities, group keys, or private keys.
 
 ## Map fidelity and persistence
 
-- Unknown DreamMaker types and variables survive parse, operation, snapshot, and save round trips.
-- Stable collaboration identifiers are explicit and never derived from process-local counters.
-- Canonical hashes use a specified byte representation and ordering.
-- Snapshots include protocol, schema, environment, map, and last-revision metadata.
-- A saved DMM/TGM is staged, reparsed, hash-checked, flushed, and atomically replaced.
-- The previous target remains intact on failure.
+Unknown DreamMaker types and variables survive parse, operation, snapshot, and save round trips. Stable IDs never derive from process-local counters. Canonical hashes use the versioned representation. Saves are staged, reparsed, hash-checked, flushed, and atomically replaced; failure preserves the prior file.
 
-## Compatibility
+## Protocol-v1 legacy invariants
 
-Protocol negotiation is explicit. Additive fields are optional only when their absence has a defined meaning. Semantic changes require a new protocol version and compatibility fixtures. Clients that cannot preserve a document's fidelity join read-only or are rejected.
+Protocol v1 remains server-authoritative and uses server persistence, resumption tokens, and hosted OIDC. Its invariants are preserved in the historical 2026-08-24 design and v1 tests. Never mix v1 server authority or PostgreSQL recovery assumptions into protocol-v2 code or documentation.

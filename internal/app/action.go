@@ -229,6 +229,9 @@ func (a *app) RunLater(job func()) {
 }
 
 func (a *app) CollaborationViewModel() collabui.ViewModel {
+	if a.onlineCollaboration != nil {
+		return a.onlineCollaborationViewModel()
+	}
 	if a.collaborationClient == nil {
 		return collabui.BuildViewModel(collabui.SessionStatus{})
 	}

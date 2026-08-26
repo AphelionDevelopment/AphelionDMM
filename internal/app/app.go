@@ -105,6 +105,8 @@ type app struct {
 	collaborationClient     *collabui.SessionClient
 	collaborationController *collabui.Controller
 	collaborationEditor     *editor.Editor
+	clientCollaboration     *clientCollaboration
+	onlineCollaboration     *onlineCollaboration
 	// APHELION EDIT ADDITION END
 
 	menu   *menu.Menu
@@ -118,6 +120,7 @@ func (a *app) initialize() {
 	a.loadConfig()
 	a.loadProjectConfig()
 	a.loadPreferencesConfig()
+	a.loadCollaborationConfig()
 
 	a.runBackgroundConfigSave()
 
@@ -127,6 +130,13 @@ func (a *app) initialize() {
 	a.pathsFilter = dm.NewPathsFilterEmpty()
 	a.clipboard = dmmclip.New()
 	// APHELION EDIT ADDITION START - COLLABORATION
+	clientCollaboration, err := initializeClientCollaboration(a.internalDir, a.collaborationConfig())
+	if err != nil {
+		log.Error().Msg("online collaboration is unavailable because local protected storage could not be initialized")
+	} else {
+		a.clientCollaboration = clientCollaboration
+		a.configSaveV(a.collaborationConfig())
+	}
 	a.collaborationClient = collabui.NewSessionClient(collabui.SessionClientConfig{})
 	a.collaborationController = collabui.NewController(func(ctx context.Context, snapshot model.Snapshot) (collabui.EmbeddedService, error) {
 		return collabserver.StartEmbedded(ctx, snapshot)
@@ -197,12 +207,20 @@ func (a *app) LayoutIniPath() string {
 
 func (a *app) dispose() {
 	// APHELION EDIT ADDITION START - COLLABORATION
+	if a.onlineCollaboration != nil {
+		a.stopOnlineCollaboration()
+	}
 	if a.collaborationController != nil {
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := a.collaborationController.Leave(shutdownContext); err != nil {
 			log.Error().Err(err).Msg("leave collaboration session during shutdown")
 		}
 		cancelShutdown()
+	}
+	if a.clientCollaboration != nil {
+		if err := a.clientCollaboration.store.Close(); err != nil {
+			log.Error().Msg("close collaboration database during shutdown")
+		}
 	}
 	// APHELION EDIT ADDITION END
 	brush.Dispose()

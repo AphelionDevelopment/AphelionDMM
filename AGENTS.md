@@ -14,7 +14,7 @@ Read the guidance relevant to the task before changing code:
 - `docs/agent/multiplayer-invariants.md` before map mutation, undo, persistence, protocol, or collaboration changes.
 - `docs/agent/upstream-drift.md` before importing or reconciling StrongDMM changes.
 - `docs/agent/generated-and-external-assets.md` before generated files, branding, fonts, images, sound, or third-party assets.
-- `docs/superpowers/specs/2026-08-24-multiplayer-design.md` for the approved multiplayer design.
+- `docs/superpowers/specs/2026-08-26-client-owned-relay-design.md` for the approved online protocol-v2 design. The 2026-08-24 server-authoritative design is retained as protocol-v1 history.
 
 ## Workflow
 
@@ -67,7 +67,9 @@ Do not create or select art, sound, lore, descriptions, item names, or branding.
 
 ## Multiplayer baseline
 
-- The server is authoritative for durable map state.
+- Protocol v2 is owner-client authoritative. The owner's client validates and orders durable map operations; every client persists its own acknowledged replica.
+- The public relay is stateless and payload-opaque. It stores no maps, operation logs, user accounts, or databases.
+- Collaboration pauses while the owner is offline. A relay restart is recovered from client state, never a server restore.
 - Durable edits are explicit, deterministic, idempotent operations; presence is ephemeral and separate.
 - Every accepted operation receives a monotonically increasing document revision.
 - Undo submits a new actor-scoped inverse operation with preconditions.
@@ -75,4 +77,6 @@ Do not create or select art, sound, lore, descriptions, item names, or branding.
 - Map saves are staged, validated, and atomically replaced. Unknown types must never be silently discarded.
 - The local single-user path uses the same operation engine as network collaboration.
 - No arbitrary filesystem paths, shell commands, secrets, or executable locations cross the collaboration protocol.
+
+Protocol v1 remains available only as a clearly labeled legacy compatibility path. Do not apply its PostgreSQL, OIDC, or server-authority assumptions to protocol-v2 work.
 

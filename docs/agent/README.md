@@ -12,7 +12,7 @@ This directory turns repository ownership, architecture, safety, and verificatio
 | StrongDMM updates or conflict reconciliation | `upstream-drift.md` |
 | Generated protocol files, branding, images, sound, fonts, or third-party assets | `generated-and-external-assets.md` |
 
-The approved design is `docs/superpowers/specs/2026-08-24-multiplayer-design.md`. The phased execution order is `docs/superpowers/plans/README.md`.
+The approved online design is `docs/superpowers/specs/2026-08-26-client-owned-relay-design.md`. The 2026-08-24 server-authoritative design is protocol-v1 history. The phased execution order is `docs/superpowers/plans/README.md`.
 
 If instructions conflict, apply this precedence:
 

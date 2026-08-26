@@ -27,8 +27,31 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 	sessionID := flags.String("session", "", "existing collaboration session ID")
 	scenarioPath := flags.String("scenario", "testdata/collaboration/load/pilot.json", "recorded load scenario JSON")
 	timeout := flags.Duration("timeout", 10*time.Minute, "overall scenario timeout")
+	relayBundlePath := flags.String("relay-bundle", "", "client-owned relay load bundle JSON")
+	relayMessages := flags.Int("relay-messages", 100, "messages sent per relay participant")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
+	}
+	if *relayBundlePath != "" {
+		bundle, err := loadscenario.LoadRelayBundle(*relayBundlePath)
+		if err != nil {
+			_, _ = fmt.Fprintf(errorOutput, "load relay bundle: %v\n", err)
+			return 1
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		ctx, cancel := context.WithTimeout(ctx, *timeout)
+		defer cancel()
+		result, err := loadscenario.RunRelay(ctx, bundle, *relayMessages)
+		if err != nil {
+			_, _ = fmt.Fprintf(errorOutput, "run relay load: %v\n", err)
+			return 1
+		}
+		if err := json.NewEncoder(output).Encode(result); err != nil {
+			_, _ = fmt.Fprintf(errorOutput, "write relay load result: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	ownerToken := os.Getenv("APHELIONDMM_LOAD_OWNER_TOKEN")
 	if ownerToken == "" {

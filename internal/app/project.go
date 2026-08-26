@@ -291,6 +291,13 @@ func (a *app) closeEnvironment(callback func(bool)) {
 // APHELION EDIT ADDITION START - COLLABORATION
 
 func (a *app) collaborationProjectReplacementGuard() (func() bool, error) {
+	if a.onlineCollaboration != nil {
+		return func() bool {
+			a.stopOnlineCollaboration()
+			a.collaborationEditor = nil
+			return true
+		}, nil
+	}
 	replacementPermit, err := a.collaborationController.BeginProjectReplacement()
 	if err != nil {
 		return nil, err

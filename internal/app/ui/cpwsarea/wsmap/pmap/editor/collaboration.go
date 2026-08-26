@@ -67,6 +67,10 @@ type pendingExecutor interface {
 	HasUnacknowledgedOperations() bool
 }
 
+func (e *Editor) CollaborationActorID() model.ActorID {
+	return e.actorID
+}
+
 // CollaborationSnapshot returns the committed map state used to start a collaboration session.
 func (e *Editor) CollaborationSnapshot(ctx context.Context) (model.Snapshot, error) {
 	if e.collaborationErr != nil {

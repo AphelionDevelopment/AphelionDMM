@@ -1,0 +1,192 @@
+asyncapi: 3.0.0
+info:
+  title: AphelionDMM Client-Owned Collaboration Relay
+  version: 2.0.0
+  description: >-
+    Protocol-v2 binary WebSocket contract. The relay validates only the fixed
+    routing header and bounded control metadata. Application payloads are
+    XChaCha20-Poly1305 encrypted and are never interpreted or persisted by the
+    relay. Protocol v1 remains a separate compatibility boundary.
+defaultContentType: application/octet-stream
+servers:
+  official:
+    host: mapping.a13.info
+    protocol: wss
+  loopback:
+    host: 127.0.0.1:8080
+    protocol: ws
+channels:
+  relay:
+    address: /v2/collaboration
+    messages:
+      room_create: { $ref: '#/components/messages/room_create' }
+      admission_replace: { $ref: '#/components/messages/admission_replace' }
+      owner_transfer: { $ref: '#/components/messages/owner_transfer' }
+      connect: { $ref: '#/components/messages/connect' }
+      heartbeat: { $ref: '#/components/messages/heartbeat' }
+      disconnect: { $ref: '#/components/messages/disconnect' }
+      route_owner: { $ref: '#/components/messages/route_owner' }
+      route_actor: { $ref: '#/components/messages/route_actor' }
+      route_room: { $ref: '#/components/messages/route_room' }
+      presence_route: { $ref: '#/components/messages/presence_route' }
+operations:
+  receiveClientFrames:
+    action: receive
+    channel: { $ref: '#/channels/relay' }
+    messages:
+      - { $ref: '#/channels/relay/messages/room_create' }
+      - { $ref: '#/channels/relay/messages/admission_replace' }
+      - { $ref: '#/channels/relay/messages/owner_transfer' }
+      - { $ref: '#/channels/relay/messages/connect' }
+      - { $ref: '#/channels/relay/messages/heartbeat' }
+      - { $ref: '#/channels/relay/messages/disconnect' }
+      - { $ref: '#/channels/relay/messages/route_owner' }
+      - { $ref: '#/channels/relay/messages/route_actor' }
+      - { $ref: '#/channels/relay/messages/route_room' }
+      - { $ref: '#/channels/relay/messages/presence_route' }
+  sendRelayFrames:
+    action: send
+    channel: { $ref: '#/channels/relay' }
+    messages:
+      - { $ref: '#/channels/relay/messages/heartbeat' }
+      - { $ref: '#/channels/relay/messages/disconnect' }
+      - { $ref: '#/channels/relay/messages/route_owner' }
+      - { $ref: '#/channels/relay/messages/route_actor' }
+      - { $ref: '#/channels/relay/messages/route_room' }
+      - { $ref: '#/channels/relay/messages/presence_route' }
+components:
+  messages:
+    room_create:
+      name: room_create
+      title: Create or recreate an ephemeral room
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 1
+    admission_replace:
+      name: admission_replace
+      title: Replace the complete admission set and restored actor bindings
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 2
+    owner_transfer:
+      name: owner_transfer
+      title: Dual-signed connected-owner replacement
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 3
+    connect:
+      name: connect
+      title: Consume an admission capability and bind an actor connection
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 4
+    heartbeat:
+      name: heartbeat
+      title: Maintain connection and room liveness
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 5
+    disconnect:
+      name: disconnect
+      title: Close a connection using a stable bounded reason
+      payload: { $ref: '#/components/schemas/BinaryEnvelope' }
+      x-aphelion-route: control
+      x-aphelion-kind: 6
+    route_owner:
+      name: route_owner
+      title: Route an opaque durable application payload to the owner
+      payload: { $ref: '#/components/schemas/EncryptedApplicationEnvelope' }
+      x-aphelion-route: owner
+      x-aphelion-kind: 32
+    route_actor:
+      name: route_actor
+      title: Route an opaque durable application payload to one actor
+      payload: { $ref: '#/components/schemas/EncryptedApplicationEnvelope' }
+      x-aphelion-route: actor
+      x-aphelion-kind: 32
+    route_room:
+      name: route_room
+      title: Route an opaque durable application payload to the room
+      payload: { $ref: '#/components/schemas/EncryptedApplicationEnvelope' }
+      x-aphelion-route: room
+      x-aphelion-kind: 32
+    presence_route:
+      name: presence_route
+      title: Route a lossy coalescible opaque presence payload
+      payload: { $ref: '#/components/schemas/EncryptedApplicationEnvelope' }
+      x-aphelion-route: presence
+      x-aphelion-kind: 32
+  schemas:
+    BinaryEnvelope:
+      type: string
+      format: binary
+      maxLength: 1048780
+      description: >-
+        ADMV magic followed by a 108-byte authenticated header, 24-byte nonce,
+        uint32 ciphertext length, 1..1048576 bytes of ciphertext, and a 64-byte
+        Ed25519 signature. Integers use network byte order. The authenticated
+        header is version:uint16, route:uint8, kind:uint8, room_id:16 bytes,
+        message_id:16 bytes, sender:32 bytes, recipient:32 bytes, and
+        sequence:uint64. IDs, sender, and sequence are nonzero. Recipient is
+        nonzero only for an actor route. Signature input is header, nonce, and
+        ciphertext in that order.
+      x-aphelion-magic: ADMV
+      x-aphelion-version: 2
+      x-aphelion-routes:
+        control: 1
+        owner: 2
+        actor: 3
+        room: 4
+        presence: 5
+    EncryptedApplicationEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/BinaryEnvelope' }
+      description: >-
+        The ciphertext decrypts only on an authorized client to strict JSON
+        containing exactly type and payload. Relay operators must not request,
+        log, persist, inspect, or derive the plaintext, invitation, admission
+        capability, group key, display name, map hash, or filesystem path.
+      x-aphelion-encrypted-application-types:
+        - sync_hello
+        - sync_replay
+        - sync_snapshot
+        - sync_complete
+        - operation_submit
+        - operation_accepted
+        - revision_acknowledged
+        - operation_rejected
+        - inverse_request
+        - profile_update
+        - presence_update
+        - role_manifest
+        - ownership_offer
+        - ownership_accept
+        - ownership_transferred
+        - session_notice
+      x-aphelion-application-json:
+        type: object
+        additionalProperties: false
+        required: [type, payload]
+        properties:
+          type:
+            type: string
+            enum:
+              - sync_hello
+              - sync_replay
+              - sync_snapshot
+              - sync_complete
+              - operation_submit
+              - operation_accepted
+              - revision_acknowledged
+              - operation_rejected
+              - inverse_request
+              - profile_update
+              - presence_update
+              - role_manifest
+              - ownership_offer
+              - ownership_accept
+              - ownership_transferred
+              - session_notice
+          payload:
+            type: object
+            description: Strict message-specific JSON decoded only by clients.

@@ -2,73 +2,42 @@
 
 ## Evidence levels
 
-Report the exact level reached:
+Report the exact level reached: static review, focused test, repository test, cross-stack build, shipped-entry-point exercise, public two-network pilot, and cross-repository acceptance. A focused green test is not a desktop or public deployment result. Record exact commands, exit codes, versions, hashes, and known gaps.
 
-1. Static review: source and contracts inspected.
-2. Focused test: the changed package or behavior passed.
-3. Repository test: all Go and Rust tests passed with pinned toolchains.
-4. Cross-stack build: the actual Task build completed for the target platform.
-5. Entry-point exercise: the produced desktop or collaboration executable completed its real smoke path.
-6. Integration acceptance: Meridian-MCP and Meridian-Rift gates passed against staged output.
+## Current toolchain
 
-Never present a lower level as a higher one. A successful focused test does not establish repository, runtime, or integration completion.
+Use the versions selected by `go.mod`, CI, and the Task files. Record `go version`, `rustc --version`, `task --version`, Docker Engine/Compose versions, and `$LASTEXITCODE` after native Windows commands. The shipped editor remains `dst/StrongDMM.exe` until a separately approved branding change.
 
-## Current authoritative versions
-
-- Go is selected by `go.mod` and currently declares Go 1.25.13.
-- CI currently selects Rust 1.82 target-qualified toolchains.
-- CI currently selects golangci-lint 2.12.2.
-- The normal cross-stack build entry point is `task build` with an explicit `RUST_TARGET` matching CI.
-- Task is not pinned in the build job. Record `task --version` with evidence until protected infrastructure is explicitly approved for a reproducibility change.
-
-Do not replace a pinned command with the ambient `go`, `cargo`, or `rustc` and call the result equivalent.
-
-## Narrow-first commands
-
-Run PowerShell commands from the repository root. Examples:
+## Protocol-v2 narrow gates
 
 ```powershell
-go test ./internal/aphelion/collab/engine -run TestDocumentApply -count=1
-go test ./internal/aphelion/collab/server -run TestTwoClientsConverge -count=1
-go test ./internal/dmapi/dmmap/dmmdata -run TestAtomicSave -count=1
+go test ./internal/aphelion/collab/protocolv2 ./internal/aphelion/collab/identity ./internal/aphelion/collab/store/sqlite -count=1
+go test ./internal/aphelion/collab/authority ./internal/aphelion/collab/replica -count=1
+go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient -count=1
+go test -race ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
+go test ./internal/aphelion/collab/ui ./internal/app/... -count=1
 ```
 
-Then broaden:
+Required automated behaviors include golden wire/invitation compatibility, invalid signatures and replays, one-use/bound admissions, deterministic owner ordering, local durability, transactional snapshot/replay, viewer rejection, conflict/inverse behavior, relay restart from clients, 2/8/32-client opaque routing, privacy assertions, and command-level health/routing smoke.
+
+## Broad and shipped gates
 
 ```powershell
 go test ./... -count=1
-go test -race ./internal/aphelion/...
-rustup run 1.82-x86_64-pc-windows-gnu cargo test --manifest-path third_party/sdmmparser/src/Cargo.toml --locked
-rustup run 1.82-x86_64-pc-windows-gnu cargo fmt --manifest-path third_party/sdmmparser/src/Cargo.toml --all -- --check
-rustup run 1.82-x86_64-pc-windows-gnu cargo clippy --manifest-path third_party/sdmmparser/src/Cargo.toml --all-targets --locked -- -D warnings
-```
-
-For the Windows cross-stack build:
-
-```powershell
-$env:RUST_TARGET = '1.82-x86_64-pc-windows-gnu'
-task task_win:gen_syso
+go test -race ./internal/aphelion/... -count=1
+task test-rust
 task build
+Get-FileHash .\dst\StrongDMM.exe -Algorithm SHA256
 ```
 
-Check `$LASTEXITCODE` after every native command. The intended desktop smoke target remains `dst/StrongDMM.exe` until a human-approved branding migration changes it.
+Run the relay command with a real YAML file, verify `/v1/health/live`, `/v1/health/ready`, `/v1/version`, and `/metrics`, route encrypted owner/editor traffic, restart only the relay, and prove clients reconstruct the room without server persistence. Container evidence must use the actual built image and Compose overlays, not only schema parsing.
 
-## Multiplayer acceptance
+## Human acceptance
 
-A multiplayer phase needs deterministic automated evidence for:
+The public acceptance gate uses two computers on separate networks against `https://mapping.a13.info`. Verify owner/editor names, non-overlapping and conflicting edits, inverse/redo, owner-offline pause, manual reconnect after relay restart, desync recovery, save/reopen fidelity, viewer restrictions, endpoint confirmation, keyboard/narrow-layout behavior, and absence of secrets or map plaintext in relay logs.
 
-- two clients reaching identical map hashes after interleaved edits;
-- duplicate operation delivery remaining idempotent;
-- reconnect replay producing the same revision and hash as an uninterrupted client;
-- actor-scoped undo accepting safe inverses and rejecting stale preconditions;
-- presence loss not changing durable state;
-- process interruption preserving the last acknowledged durable revision;
-- snapshot plus replay reconstructing the authoritative hash;
-- rejected environment/hash mismatches leaving state unchanged;
-- atomic save preserving the old target on validation or replacement failure.
-
-Use fixed seeds for repeatable tests and record randomized seeds when a property or fuzz test fails.
+Do not call protocol v2 complete until the UI exposes every tested action and the public pilot passes. In particular, protocol/authority support alone does not establish desktop owner-transfer acceptance.
 
 ## Protected gates
 
-Changes to `.github/workflows/ci.yml`, `Taskfile.yml`, `Taskfile_windows.yml`, signing, updater publication, or release steps require exact-file review and explicit user confirmation. Plans may describe those changes; executors may not apply them without that confirmation.
+Changes to `.github/workflows/ci.yml`, `Taskfile.yml`, `Taskfile_windows.yml`, deployment/bootstrap/release/signing entry points, or updater publication require exact-file/effect review and explicit confirmation before editing.

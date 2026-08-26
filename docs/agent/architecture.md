@@ -2,81 +2,45 @@
 
 ## Current application
 
-AphelionDMM currently inherits StrongDMM's single-process desktop architecture:
+AphelionDMM is an Aphelion-owned StrongDMM downstream. The inherited Dear ImGui desktop, mutable map model, DMM/TGM serializer, and vendored Rust parser remain in place. Aphelion collaboration enters the editor through the narrow executor seam in `internal/app/ui/cpwsarea/wsmap/pmap/editor`.
+
+## Protocol-v2 online architecture
 
 ```text
-Dear ImGui UI
-    -> editor tools
-    -> mutable dmmap.Dmm
-    -> dmmsnap full-map comparison for undo/redo
-    -> DMM/TGM writer
-
-Go application
-    -> cgo/static library boundary
-    -> vendored Rust sdmmparser
+Owner desktop
+  UI -> owner executor -> owner authority -> local SQLite
+                         -> encrypted/signed operation broadcast
+                                      |
+                              stateless relay
+                                      |
+Participant desktop                    |
+  UI -> replica executor -> local SQLite <- encrypted/signed replay/snapshot
 ```
 
-Important existing seams include:
+- `internal/aphelion/collab/model` and `engine` own deterministic operations, conflicts, hashes, and inverse operations.
+- `authority` owns protocol-v2 validation, ordering, membership, signed manifests, invitations, and the current document while the owner is online.
+- `replica` owns participant snapshot/replay installation and durable pending-operation records.
+- `store/sqlite` persists each client's own session, snapshot, accepted log, manifests, admissions, and pending work.
+- `protocolv2` owns the signed binary envelope, encrypted application payloads, invitations, and control messages.
+- `relay` routes opaque frames and keeps only short-lived connection, room, admission-digest, role, and rate-limit state in memory.
+- `relayclient` adapts owner and participant state machines to the WebSocket relay.
+- `cmd/apheliondmm-relay` is the public stateless relay executable.
 
-- `main.go` and `internal/app` for application lifecycle.
-- `internal/app/ui/cpwsarea/wsmap/pmap/editor` for map editing and commits.
-- `internal/dmapi/dmmap` for the mutable map model.
-- `internal/dmapi/dmmsnap` for snapshot-derived undo/redo.
-- `internal/dmapi/dmmap/dmmdata` for DMM/TGM parse and write behavior.
-- `third_party/sdmmparser` for the Rust parser boundary.
+The relay never parses application plaintext, decides map conflicts, stores a map, mints user identity, or restores a session. The owner recreates relay routing state after a relay restart. Participants synchronize from the owner and pause when it is unavailable.
 
-`Editor.CommitChanges` currently launches asynchronous snapshot comparison after mutations have already occurred. DMM/TGM writers currently write directly to the target path and do not return errors. These are migration constraints, not multiplayer foundations.
+## Identity and ownership
 
-## Target boundaries
+Each installation has an Ed25519 identity protected by the platform secret store. A session has a random room ID and group encryption key. The owner signs role manifests and short-lived, one-use invitations. An admitted participant binds its capability to its public key. Ownership transfer requires both the current owner and target editor to sign the exact resulting manifest before the relay changes routing authority.
 
-```text
-Desktop UI ---- local executor -----+
-                                     |
-Remote client -- WSS transport ------+--> authoritative operation engine
-                                     |        -> validation and ordering
-HTTP control/snapshot ---------------+        -> revisioned operation log
-                                              -> snapshot store
-                                              -> atomic DMM/TGM export
+## Desktop lifecycle
 
-Meridian-MCP <---- versioned adapter / diagnostics coordinator
-Content Tools <--- OpenAPI and AsyncAPI contracts
-Meridian-Rift <-- staged artifact, hashes, then authoritative build gates
-```
+The default online endpoint is `https://mapping.a13.info`; users may configure another HTTPS endpoint. Loopback HTTP is permitted for local testing. Starting an online session creates authority and local persistence before attaching the executor. Joining verifies the invitation, environment, endpoint, and owner signature before installing replay or snapshot state. Relay transport failures disable mutation and expose reconnect rather than silently returning to local editing.
 
-New Aphelion-owned packages:
+## Protocol-v1 legacy architecture
 
-- `internal/aphelion/collab/model`: deterministic domain values and operations.
-- `internal/aphelion/collab/engine`: validation, ordering, conflict decisions, and inverse operations.
-- `internal/aphelion/collab/protocol`: HTTP/WebSocket wire envelopes and version negotiation.
-- `internal/aphelion/collab/server`: sessions, presence, authorization, and transports.
-- `internal/aphelion/collab/client`: desktop transport and reconciliation.
-- `internal/aphelion/collab/store`: snapshots and operation-log persistence.
-- `internal/aphelion/integration`: bounded Meridian and content-tools adapters.
-- `cmd/apheliondmm-collab`: the collaboration service executable.
+`internal/aphelion/collab/server`, the PostgreSQL/OIDC hosted service, and embedded local service are retained for compatibility and migration evidence. Protocol v1 is server-authoritative and uses different identity, persistence, invitation, and recovery rules. New online work targets protocol v2 unless the task explicitly names the legacy service.
 
-## Dependency rules
+## Integration boundary
 
-- `model` depends only on the Go standard library.
-- `engine` depends on `model`, not UI, networking, storage, or ImGui.
-- `protocol` maps wire data to `model`; wire compatibility does not leak UI types.
-- `server` owns ordering. Store implementations never decide conflicts.
-- `client` never mutates the map outside the same executor abstraction used by local mode.
-- inherited UI code depends on narrow Aphelion interfaces; Aphelion packages do not depend on concrete ImGui widgets.
-- integrations consume versioned contracts and immutable configuration, not shared database tables.
-
-## Concurrency model
-
-Each open document has one authoritative mutation loop. It serializes durable operations and owns the current revision. Network readers, presence updates, persistence, rendering, and telemetry may run concurrently, but they cannot mutate authoritative document state directly.
-
-The UI thread remains the only owner of OpenGL/ImGui work. Applied operations produce immutable render invalidations that are scheduled onto the UI thread.
-
-## Deployment modes
-
-The same service binary supports:
-
-- embedded loopback mode launched by the desktop client;
-- explicitly enabled LAN mode with authentication and TLS rules;
-- hosted mode behind TLS, OIDC, PostgreSQL, backups, and operational monitoring.
-
-Loopback is the default. A deployment mode may strengthen authentication and persistence, but it may not change operation semantics.
+Meridian-MCP and Meridian-Rift consume staged maps, hashes, and versioned contracts; they are not collaboration transports or relay authorities. Content Tools integration is deferred and is not part of the protocol-v2 relay rollout.
 

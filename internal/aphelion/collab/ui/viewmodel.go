@@ -14,16 +14,22 @@ import (
 const maxVisibleConflicts = 20
 
 type SessionStatus struct {
-	SessionID       string
-	Role            string
-	State           client.State
-	Revision        model.Revision
-	Participants    []protocol.ParticipantPresence
-	Conflicts       []client.Conflict
-	InviteReady     bool
-	ReconnectReady  bool
-	Err             error
-	SensitiveValues []string
+	SessionID          string
+	Role               string
+	State              client.State
+	Revision           model.Revision
+	Participants       []protocol.ParticipantPresence
+	Conflicts          []client.Conflict
+	InviteReady        bool
+	ReconnectReady     bool
+	Err                error
+	SensitiveValues    []string
+	Paused             bool
+	Desynchronized     bool
+	RecoveryAction     string
+	PendingReady       int
+	PendingConflicting int
+	PendingObsolete    int
 }
 
 type ParticipantView struct {
@@ -48,6 +54,12 @@ type ViewModel struct {
 	CanReconnect        bool
 	CanLeave            bool
 	ErrorText           string
+	Paused              bool
+	Desynchronized      bool
+	RecoveryAction      string
+	PendingReady        int
+	PendingConflicting  int
+	PendingObsolete     int
 }
 
 func BuildViewModel(status SessionStatus) ViewModel {
@@ -104,12 +116,23 @@ func BuildViewModel(status SessionStatus) ViewModel {
 		ConflictSummaries:   conflicts,
 		Conflicts:           actionableConflicts,
 		HiddenConflictCount: len(status.Conflicts) - visibleConflicts,
-		CanEdit:             role == "owner" || role == "editor",
-		CanAdminister:       role == "owner",
-		CanCopyInvite:       role == "owner" && status.InviteReady,
+		CanEdit:             (role == "owner" || role == "editor") && !status.Paused && !status.Desynchronized,
+		CanAdminister:       role == "owner" && !status.Paused && !status.Desynchronized,
+		CanCopyInvite:       role == "owner" && status.InviteReady && !status.Paused && !status.Desynchronized,
 		ShowReconnect:       status.State == client.StateReconnecting,
 		CanReconnect:        status.ReconnectReady && (status.State == client.StateDisconnected || status.State == client.StateReconnecting),
 		CanLeave:            active,
+		Paused:              status.Paused,
+		Desynchronized:      status.Desynchronized,
+		RecoveryAction:      status.RecoveryAction,
+		PendingReady:        status.PendingReady,
+		PendingConflicting:  status.PendingConflicting,
+		PendingObsolete:     status.PendingObsolete,
+	}
+	if status.Desynchronized {
+		view.SyncLabel = "Desynchronized"
+	} else if status.Paused {
+		view.SyncLabel = "Owner offline"
 	}
 	if status.Err != nil {
 		view.ErrorText = redactSensitive(status.Err.Error(), status.SensitiveValues)

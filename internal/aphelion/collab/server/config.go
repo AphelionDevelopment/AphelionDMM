@@ -3,15 +3,10 @@ package server
 import (
 	"time"
 
-	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
+	"sdmm/internal/aphelion/collab/authority"
 )
 
-type DocumentConfig struct {
-	SnapshotOperationThreshold int
-	SnapshotInterval           time.Duration
-	OnSnapshotError            func(error)
-	Telemetry                  *collabtelemetry.Telemetry
-}
+type DocumentConfig = authority.Config
 
 type EmbeddedConfig struct {
 	Store           SessionStore

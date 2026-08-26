@@ -12,11 +12,14 @@ vars:
     sh: git rev-parse --short HEAD
   APP_NAME: StrongDMM
   BIN_DST: '{{.APP_NAME}}{{exeExt}}'
+  RELAY_BIN_DST: 'apheliondmm-relay{{exeExt}}'
+  HEALTHCHECK_BIN_DST: 'apheliondmm-healthcheck{{exeExt}}'
   BUILD_VARS: -X sdmm/internal/env.Version={{.GIT_VERSION}} -X sdmm/internal/env.Revision={{.GIT_REV}}
   LD_FLAGS_WINDOWS:
     sh: echo '{{if eq OS "windows"}}-H windowsgui -extldflags=-static{{end}}'
   LD_FLAGS: -s -w {{.BUILD_VARS}} {{.LD_FLAGS_WINDOWS}}
   BUILD_ARGS: -trimpath -ldflags="{{.LD_FLAGS}}"
+  RELAY_BUILD_ARGS: -trimpath -ldflags="-s -w -X main.buildRevision={{.GIT_REV}}"
 
 tasks:
   default:
@@ -50,6 +53,15 @@ tasks:
     cmds:
       - go build {{.BUILD_ARGS}} -o "dst/{{.BIN_DST}}" .
 
+  build-relay:
+    cmds:
+      - go build {{.RELAY_BUILD_ARGS}} -o "dst/{{.RELAY_BIN_DST}}" ./cmd/apheliondmm-relay
+      - go build -trimpath -ldflags="-s -w" -o "dst/{{.HEALTHCHECK_BIN_DST}}" ./cmd/apheliondmm-healthcheck
+
+  build-relay-image:
+    cmds:
+      - docker build --file deploy/relay/Dockerfile --build-arg APHELIONDMM_BUILD=self-hosted --build-arg APHELIONDMM_REVISION={{.GIT_REV}} --tag apheliondmm-relay:local .
+
   build:
     cmds:
       - task: build-parser
@@ -58,6 +70,17 @@ tasks:
   test-go:
     cmds:
       - go test ./... -count=1
+
+  test-relay:
+    cmds:
+      - go test ./internal/aphelion/collab/protocolv2 ./internal/aphelion/collab/identity ./internal/aphelion/collab/authority ./internal/aphelion/collab/replica ./internal/aphelion/collab/container -count=1
+      - go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
+      - go test ./cmd/apheliondmm-relay ./cmd/apheliondmm-healthcheck ./cmd/apheliondmm-loadtest -count=1
+
+  verify-relay:
+    cmds:
+      - task: test-relay
+      - task: build-relay
 
   test-rust:
     dir: third_party/sdmmparser/src

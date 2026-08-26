@@ -129,6 +129,69 @@ jobs:
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
           go test ./internal/aphelion/collab/protocol -run '^$' -fuzz '^FuzzDecodeServer$' -fuzztime=5s
 
+  relay-v2-gates:
+    name: Protocol v2 Relay Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        run: |
+          sudo apt clean
+          sudo apt update
+          sudo apt install xorg-dev libgtk-3-dev
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          architecture: x64
+          cache: true
+
+      - name: Protocol v2 Fuzz Smoke
+        run: |
+          go test ./internal/aphelion/collab/protocolv2 -run '^$' -fuzz '^FuzzUnmarshalEnvelope$' -fuzztime=5s
+          go test ./internal/aphelion/collab/protocolv2 -run '^$' -fuzz '^FuzzDecodeApplication$' -fuzztime=5s
+
+      - name: Relay Race and Command Gates
+        run: |
+          go test -race ./internal/aphelion/collab/relay ./internal/aphelion/collab/relayclient ./internal/aphelion/collab/load ./internal/aphelion/smoke -count=1
+          go test ./cmd/apheliondmm-relay ./cmd/apheliondmm-healthcheck ./cmd/apheliondmm-loadtest ./internal/aphelion/collab/container -count=1
+
+      - name: Validate Relay Compose
+        run: |
+          cp deploy/relay/.env.example deploy/relay/.env
+          cp deploy/relay/relay.yaml.example deploy/relay/relay.yaml
+          mkdir -p deploy/relay/secrets
+          printf 'ci-only-placeholder\n' > deploy/relay/secrets/cloudflare_tunnel_token.txt
+          docker compose --env-file deploy/relay/.env -f deploy/relay/compose.yaml -f deploy/relay/compose.loopback.yaml config --quiet
+          docker compose --env-file deploy/relay/.env -f deploy/relay/compose.yaml -f deploy/relay/compose.cloudflare.yaml config --quiet
+
+      - name: Build Stateless Relay Image
+        run: |
+          docker build \
+            --file deploy/relay/Dockerfile \
+            --build-arg APHELIONDMM_BUILD=ci \
+            --build-arg APHELIONDMM_REVISION="${GITHUB_SHA}" \
+            --tag apheliondmm-relay:ci \
+            .
+
+      - name: Exercise Relay Image Lifecycle
+        env:
+          APHELION_RELAY_TEST_IMAGE: apheliondmm-relay:ci
+        run: go test -tags=container ./internal/aphelion/collab/container -run '^TestRelayImageLifecycle$' -count=1 -timeout=5m -v
+
+      - name: Scan Stateless Relay Image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: apheliondmm-relay:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          scanners: vuln,secret,misconfig
+
   hosted-collaboration-gates:
     name: Hosted Collaboration Gates
     runs-on: ubuntu-latest
