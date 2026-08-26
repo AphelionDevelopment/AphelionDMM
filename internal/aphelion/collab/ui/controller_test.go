@@ -42,11 +42,11 @@ func TestControllerCreateLocalNamedPassesOwnerDisplayName(t *testing.T) {
 	service := &fakeEmbeddedService{endpoint: "http://127.0.0.1:1234", token: "launch-secret"}
 	client := &fakeCollaborationClient{}
 	controller := NewController(func(context.Context, model.Snapshot) (EmbeddedService, error) { return service, nil }, client)
-	if err := controller.CreateLocalNamed(context.Background(), snapshot, "Zoe"); err != nil {
+	if err := controller.CreateLocalNamed(context.Background(), snapshot, "Test Owner"); err != nil {
 		t.Fatal(err)
 	}
-	if client.createdName != "Zoe" {
-		t.Fatalf("owner display name = %q, want Zoe", client.createdName)
+	if client.createdName != "Test Owner" {
+		t.Fatalf("owner display name = %q, want Test Owner", client.createdName)
 	}
 }
 

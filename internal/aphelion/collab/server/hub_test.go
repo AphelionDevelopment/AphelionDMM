@@ -130,12 +130,12 @@ func TestHubUpdateDisplayNamePublishesAuthenticatedParticipant(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
-	if err := hub.UpdateDisplayName("session-1", owner, "Zoe"); err != nil {
+	if err := hub.UpdateDisplayName("session-1", owner, "Test Owner"); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case renamed := <-updates:
-		if renamed.ActorID != owner.ActorID() || renamed.DisplayName != "Zoe" || renamed.Sequence != 1 {
+		if renamed.ActorID != owner.ActorID() || renamed.DisplayName != "Test Owner" || renamed.Sequence != 1 {
 			t.Fatalf("renamed presence = %#v", renamed)
 		}
 	case <-time.After(time.Second):

@@ -211,7 +211,7 @@ func TestEmbeddedSessionUsesRequestedOwnerDisplayName(t *testing.T) {
 	}
 	testServer := httptest.NewServer(service.Handler())
 	t.Cleanup(testServer.Close)
-	body, err := json.Marshal(map[string]any{"snapshot": snapshot, "display_name": "Zoe"})
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot, "display_name": "Test Owner"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,8 +231,8 @@ func TestEmbeddedSessionUsesRequestedOwnerDisplayName(t *testing.T) {
 		t.Fatalf("members = %d, want 1", len(members))
 	}
 	for _, member := range members {
-		if member.DisplayName() != "Zoe" {
-			t.Fatalf("owner display name = %q, want Zoe", member.DisplayName())
+		if member.DisplayName() != "Test Owner" {
+			t.Fatalf("owner display name = %q, want Test Owner", member.DisplayName())
 		}
 	}
 }

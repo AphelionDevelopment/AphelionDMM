@@ -56,6 +56,8 @@ Run two real StrongDMM windows and record any failure with both clients' logs an
 
 These are deployment and operational gates, not missing editor features.
 
+The game-server executor should begin with [`docs/hosting/game-server-deployment-agent-handoff.md`](../../hosting/game-server-deployment-agent-handoff.md). It contains the server inventory, immutable-source, OIDC, dedicated-tunnel, rollout, rollback, evidence, and stop-condition checklist.
+
 - Complete the interactive Cloudflare Access login and inventory the Meridian server's Docker capacity, storage, service account, and backup destination.
 - Install the locally verified Compose project on the Meridian server with ACL-restricted secrets and PostgreSQL storage.
 - Create the dedicated public tunnel and publish `mapping.a13.info` without a Cloudflare Access application after local readiness succeeds.

@@ -25,11 +25,11 @@ Run it from PowerShell with explicit local roots:
 
 ```powershell
 & .\scripts\integration\verify-aphelion-stack.ps1 `
-	-AphelionRoot 'C:\Users\Zoe\Documents\GitHub\AphelionDMM' `
-	-MeridianMcpRoot 'C:\Users\Zoe\Documents\GitHub\meridian-mcp' `
-	-ContentToolsRoot 'C:\Users\Zoe\Documents\GitHub\aphelion-content-tools' `
-	-MeridianRiftRoot 'C:\Users\Zoe\Documents\GitHub\Meridian-Rift' `
-	-InstalledMcp 'C:\Users\Zoe\AppData\Local\meridian-mcp\meridian-mcp-spacemandmm-20260824.exe'
+	-AphelionRoot 'C:\Repositories\AphelionDMM' `
+	-MeridianMcpRoot 'C:\Repositories\meridian-mcp' `
+	-ContentToolsRoot 'C:\Repositories\aphelion-content-tools' `
+	-MeridianRiftRoot 'C:\Repositories\Meridian-Rift' `
+	-InstalledMcp 'C:\Tools\meridian-mcp\meridian-mcp.exe'
 ```
 
 Network use is disabled by default for the Meridian build. `-AllowNetwork` is an explicit operator choice.

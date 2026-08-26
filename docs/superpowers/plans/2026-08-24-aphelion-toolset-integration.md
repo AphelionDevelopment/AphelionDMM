@@ -93,7 +93,7 @@ type Config struct {
 
 ### Task 3: Declare AphelionDMM compatibility in Meridian-MCP
 
-**Repository:** `C:\Users\Zoe\Documents\GitHub\meridian-mcp`
+**Repository:** `C:\Repositories\meridian-mcp`
 
 **Files:**
 - Create: `tests/compatibility/aphelion-dmm.json`
@@ -111,7 +111,7 @@ type Config struct {
 
 ### Task 4: Add Content Tools backend collaboration adapter
 
-**Repository:** `C:\Users\Zoe\Documents\GitHub\aphelion-content-tools`
+**Repository:** `C:\Repositories\aphelion-content-tools`
 
 **Files:**
 - Create: `webapp/api/routes/collaboration.py`
@@ -132,7 +132,7 @@ type Config struct {
 
 ### Task 5: Add Content Tools collaboration status UI
 
-**Repository:** `C:\Users\Zoe\Documents\GitHub\aphelion-content-tools`
+**Repository:** `C:\Repositories\aphelion-content-tools`
 
 **Files:**
 - Create: `webapp/frontend/src/features/collaboration/api.ts`

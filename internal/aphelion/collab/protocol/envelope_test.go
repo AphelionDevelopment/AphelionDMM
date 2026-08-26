@@ -215,12 +215,12 @@ func TestDecodeClientValidatesProfileUpdate(t *testing.T) {
 		}
 		return data
 	}
-	decoded, err := DecodeClient(encode("Zoe"))
+	decoded, err := DecodeClient(encode("Test Owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload := decoded.Payload.(*ProfileUpdatePayload); payload.DisplayName != "Zoe" {
-		t.Fatalf("display name = %q, want Zoe", payload.DisplayName)
+	if payload := decoded.Payload.(*ProfileUpdatePayload); payload.DisplayName != "Test Owner" {
+		t.Fatalf("display name = %q, want Test Owner", payload.DisplayName)
 	}
 	for _, invalid := range []string{"", "   ", strings.Repeat("x", MaxDisplayNameBytes+1)} {
 		if _, err := DecodeClient(encode(invalid)); err == nil {

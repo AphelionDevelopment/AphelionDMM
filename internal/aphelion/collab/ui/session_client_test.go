@@ -55,11 +55,11 @@ func TestSessionClientCreateNamedSendsOwnerDisplayName(t *testing.T) {
 	}))
 	t.Cleanup(testServer.Close)
 	client := NewSessionClient(SessionClientConfig{})
-	if _, err := client.CreateNamed(context.Background(), testServer.URL, "launch-token", snapshot, "  Zoe  "); err != nil {
+	if _, err := client.CreateNamed(context.Background(), testServer.URL, "launch-token", snapshot, "  Test Owner  "); err != nil {
 		t.Fatal(err)
 	}
-	if displayName != "Zoe" {
-		t.Fatalf("display name = %q, want Zoe", displayName)
+	if displayName != "Test Owner" {
+		t.Fatalf("display name = %q, want Test Owner", displayName)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestSessionClientUpdatesAuthenticatedDisplayName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := client.UpdateDisplayName(context.Background(), "  Zoe  "); err != nil {
+	if err := client.UpdateDisplayName(context.Background(), "  Test Owner  "); err != nil {
 		t.Fatal(err)
 	}
 	if len(transport.sent) != 1 {
@@ -134,7 +134,7 @@ func TestSessionClientUpdatesAuthenticatedDisplayName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Envelope.Type != protocol.ClientProfileUpdate || decoded.Payload.(*protocol.ProfileUpdatePayload).DisplayName != "Zoe" {
+	if decoded.Envelope.Type != protocol.ClientProfileUpdate || decoded.Payload.(*protocol.ProfileUpdatePayload).DisplayName != "Test Owner" {
 		t.Fatalf("profile update = %#v", decoded)
 	}
 	if err := client.UpdateDisplayName(context.Background(), "   "); err == nil {
