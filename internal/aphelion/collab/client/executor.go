@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"sdmm/internal/aphelion/collab/model"
@@ -202,6 +203,10 @@ func (network *NetworkExecutor) Suspend(cause error) {
 	}
 	network.mutex.Lock()
 	defer network.mutex.Unlock()
+	network.suspendLocked(cause)
+}
+
+func (network *NetworkExecutor) suspendLocked(cause error) {
 	if network.terminal != nil || network.suspended != nil {
 		return
 	}
@@ -370,26 +375,33 @@ func (network *NetworkExecutor) Terminate(cause error) {
 	network.failAll(cause)
 }
 
-func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) {
+func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) error {
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		network.failAll(err)
-		return
+		return err
 	}
 	decoded, err := protocol.DecodeServer(data)
 	if err != nil {
-		network.failAll(fmt.Errorf("decode network executor message: %w", err))
-		return
+		decodeErr := fmt.Errorf("decode network executor message: %w", err)
+		network.failAll(decodeErr)
+		return decodeErr
 	}
 	network.mutex.Lock()
 	defer network.mutex.Unlock()
 	switch decoded.Envelope.Type {
 	case protocol.ServerOperationAccepted:
 		payload := decoded.Payload.(*protocol.OperationAcceptedPayload)
+		if prior, exists := network.accepted[payload.Operation.OperationID]; exists && reflect.DeepEqual(prior, payload.Operation) {
+			acknowledgedHash, hashErr := network.projection.Acknowledged.Hash()
+			if hashErr == nil && payload.Operation.Revision == network.projection.Acknowledged.Revision && payload.MapHash == acknowledgedHash {
+				return nil
+			}
+		}
 		projection, applyErr := network.projection.Accept(payload.Operation, payload.MapHash)
 		if applyErr != nil {
-			network.failAllLocked(applyErr)
-			return
+			network.suspendLocked(applyErr)
+			return applyErr
 		}
 		network.projection = projection
 		network.accepted[payload.Operation.OperationID] = model.CloneAcceptedOperation(payload.Operation)
@@ -402,8 +414,8 @@ func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) {
 		payload := decoded.Payload.(*protocol.OperationRejectedPayload)
 		projection, conflict, rejectErr := network.projection.Reject(*payload)
 		if rejectErr != nil {
-			network.failAllLocked(rejectErr)
-			return
+			network.suspendLocked(rejectErr)
+			return rejectErr
 		}
 		network.projection = projection
 		network.conflicts = append(network.conflicts, cloneConflict(conflict))
@@ -416,6 +428,7 @@ func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) {
 		}
 		network.publishLocked()
 	}
+	return nil
 }
 
 func cloneConflict(conflict Conflict) Conflict {

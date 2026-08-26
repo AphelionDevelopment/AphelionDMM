@@ -206,6 +206,29 @@ func mustMarshalPayload(t *testing.T, payload any) json.RawMessage {
 	return encoded
 }
 
+func TestDecodeClientValidatesProfileUpdate(t *testing.T) {
+	t.Parallel()
+	encode := func(displayName string) []byte {
+		data, err := json.Marshal(ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "profile", SessionID: "session", Type: ClientProfileUpdate, Payload: mustMarshalPayload(t, ProfileUpdatePayload{DisplayName: displayName})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	decoded, err := DecodeClient(encode("Zoe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload := decoded.Payload.(*ProfileUpdatePayload); payload.DisplayName != "Zoe" {
+		t.Fatalf("display name = %q, want Zoe", payload.DisplayName)
+	}
+	for _, invalid := range []string{"", "   ", strings.Repeat("x", MaxDisplayNameBytes+1)} {
+		if _, err := DecodeClient(encode(invalid)); err == nil {
+			t.Fatalf("DecodeClient() accepted invalid display name %q", invalid)
+		}
+	}
+}
+
 func TestContractsDeclareEveryFixtureMessage(t *testing.T) {
 	t.Parallel()
 

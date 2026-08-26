@@ -23,6 +23,7 @@ type Limits struct {
 	MaxOperationChanges      int
 	MaxWebSocketMessageBytes int64
 	MaxHTTPBodyBytes         int64
+	MaxSnapshotBodyBytes     int64
 	DurableQueueDepth        int
 	PresenceQueueDepth       int
 	RateEntries              int
@@ -37,6 +38,7 @@ func DefaultLimits() Limits {
 		MaxOperationChanges:      protocol.MaxOperationChanges,
 		MaxWebSocketMessageBytes: protocol.MaxMessageBytes,
 		MaxHTTPBodyBytes:         MaxHTTPBodyBytes,
+		MaxSnapshotBodyBytes:     MaxSnapshotBodyBytes,
 		DurableQueueDepth:        defaultDurableQueueDepth,
 		PresenceQueueDepth:       defaultPresenceQueueDepth,
 		RateEntries:              defaultRateEntries,
@@ -59,6 +61,9 @@ func (limits Limits) withDefaults() Limits {
 	}
 	if limits.MaxHTTPBodyBytes <= 0 || limits.MaxHTTPBodyBytes > MaxHTTPBodyBytes {
 		limits.MaxHTTPBodyBytes = defaults.MaxHTTPBodyBytes
+	}
+	if limits.MaxSnapshotBodyBytes <= 0 || limits.MaxSnapshotBodyBytes > MaxSnapshotBodyBytes {
+		limits.MaxSnapshotBodyBytes = defaults.MaxSnapshotBodyBytes
 	}
 	if limits.DurableQueueDepth <= 0 {
 		limits.DurableQueueDepth = defaults.DurableQueueDepth

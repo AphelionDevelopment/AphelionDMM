@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mapping.a13.info/schemas/apheliondmm-hosted-config-v1.json",
+  "title": "AphelionDMM hosted collaboration configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bind_address", "public_origin", "trusted_proxy_cidrs", "database", "oidc", "limits", "telemetry"],
+  "properties": {
+    "bind_address": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "public_origin": { "$ref": "#/$defs/httpsOrigin" },
+    "trusted_proxy_cidrs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 3, "maxLength": 64 }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dsn"],
+      "properties": { "dsn": { "$ref": "#/$defs/secretSource" } }
+    },
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "client_id", "redirect_url", "client_secret"],
+      "properties": {
+        "issuer": { "$ref": "#/$defs/httpsOrigin" },
+        "client_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "redirect_url": { "type": "string", "format": "uri", "pattern": "^https://[^?#]+/v1/auth/complete$" },
+        "client_secret": { "$ref": "#/$defs/secretSource" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_connections", "max_operation_changes", "max_websocket_message_bytes", "max_http_body_bytes", "max_snapshot_body_bytes"],
+      "properties": {
+        "max_connections": { "type": "integer", "minimum": 1 },
+        "max_operation_changes": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_websocket_message_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "max_http_body_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "max_snapshot_body_bytes": { "type": "integer", "minimum": 1, "maximum": 268435456 }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint"],
+      "properties": {
+        "endpoint": {
+          "oneOf": [
+            { "const": "" },
+            { "$ref": "#/$defs/httpsOrigin" }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "httpsOrigin": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#]+/?$"
+    },
+    "secretSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["environment"],
+          "properties": {
+            "environment": { "type": "string", "pattern": "^APHELIONDMM_[A-Z0-9_]+$" }
+          }
+        },
+        {
+          "required": ["file"],
+          "properties": {
+            "file": { "type": "string", "pattern": "^(?:/|[A-Za-z]:[\\\\]).+" }
+          }
+        }
+      ]
+    }
+  }
+}
+

@@ -2,6 +2,8 @@
 
 This guide is for the first hands-on test of AphelionDMM multiplayer. It focuses on the desktop behavior that automated tests cannot judge. Aphelion Content Tools is not part of this test.
 
+For the Docker-backed hosted desktop flow, use `docs/testing/multiplayer-online-pilot-guide.md`. This guide remains the broader local and usability checklist.
+
 ## Before testing
 
 - Use two Windows desktop sessions or two people if possible. Two editor windows on one computer are acceptable for the first pass.
@@ -46,6 +48,8 @@ Use visible, reversible edits in the disposable map.
 7. Move the pointer and make a selection on different tiles and z-levels. Presence should appear only where relevant, remain readable, and disappear after the participant leaves.
 
 Watch for flicker, duplicate edits, edits that appear and then vanish without explanation, revision numbers moving backward, long UI freezes, or different final map contents.
+
+If session creation still returns HTTP 413, report the snapshot request byte count included in the error. Do not attach the map itself unless the test coordinator requests it through a private channel.
 
 ## Roles and lifecycle
 

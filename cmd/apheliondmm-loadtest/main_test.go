@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -14,6 +15,21 @@ func TestLoadScenarioReadsRecordedPilotSeed(t *testing.T) {
 	}
 	if scenario.Config.Seed != 20260825 || scenario.Config.Clients != 25 || scenario.ExpectedRevision != 250 {
 		t.Fatalf("scenario = %#v", scenario)
+	}
+}
+
+func TestEditorTokensFromEnvironmentLoadsHostedCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "editor-tokens.json")
+	if err := os.WriteFile(path, []byte(`{"tokens":["first","second"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APHELIONDMM_LOAD_EDITOR_TOKENS_FILE", path)
+	tokens, err := editorTokensFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 || tokens[0] != "first" || tokens[1] != "second" {
+		t.Fatalf("tokens = %#v", tokens)
 	}
 }
 

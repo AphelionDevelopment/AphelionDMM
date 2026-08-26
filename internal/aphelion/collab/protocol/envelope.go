@@ -35,6 +35,7 @@ const (
 	ClientOperationSubmit      ClientType = "operation_submit"
 	ClientInverseRequest       ClientType = "inverse_request"
 	ClientPresenceUpdate       ClientType = "presence_update"
+	ClientProfileUpdate        ClientType = "profile_update"
 	ClientAcknowledgedRevision ClientType = "acknowledged_revision"
 	ClientPing                 ClientType = "ping"
 
@@ -94,6 +95,10 @@ type PresenceUpdatePayload struct {
 	Cursor    *model.Coord       `json:"cursor,omitempty"`
 	Selection *PresenceSelection `json:"selection,omitempty"`
 	Status    string             `json:"status"`
+}
+
+type ProfileUpdatePayload struct {
+	DisplayName string `json:"display_name"`
 }
 
 type PresenceSelection struct {
@@ -162,7 +167,7 @@ type SessionNoticePayload struct {
 type PongPayload = PingPayload
 
 func AllClientTypes() []MessageType {
-	return []MessageType{ClientJoin, ClientOperationSubmit, ClientInverseRequest, ClientPresenceUpdate, ClientAcknowledgedRevision, ClientPing}
+	return []MessageType{ClientJoin, ClientOperationSubmit, ClientInverseRequest, ClientPresenceUpdate, ClientProfileUpdate, ClientAcknowledgedRevision, ClientPing}
 }
 
 func AllServerTypes() []MessageType {
@@ -191,6 +196,8 @@ func DecodeClient(data []byte) (DecodedClient, error) {
 		payload = &InverseRequestPayload{}
 	case ClientPresenceUpdate:
 		payload = &PresenceUpdatePayload{}
+	case ClientProfileUpdate:
+		payload = &ProfileUpdatePayload{}
 	case ClientAcknowledgedRevision:
 		payload = &AcknowledgedRevisionPayload{}
 	case ClientPing:
@@ -278,6 +285,11 @@ func validateClientPayload(payload any) error {
 			return err
 		}
 		return validateIdentifier("status", value.Status)
+	case *ProfileUpdatePayload:
+		if strings.TrimSpace(value.DisplayName) == "" || len(value.DisplayName) > MaxDisplayNameBytes {
+			return fmt.Errorf("display name length is %d, want 1..%d non-whitespace bytes", len(value.DisplayName), MaxDisplayNameBytes)
+		}
+		return nil
 	case *AcknowledgedRevisionPayload:
 		return nil
 	case *PingPayload:

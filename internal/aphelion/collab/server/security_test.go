@@ -263,10 +263,10 @@ func TestConfiguredWebSocketByteLimitClosesOversizedFrame(t *testing.T) {
 	}
 }
 
-func TestConfiguredHTTPBodyLimitRejectsBeforeDecode(t *testing.T) {
+func TestConfiguredSnapshotBodyLimitRejectsBeforeDecode(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(ServiceConfig{Limits: Limits{MaxHTTPBodyBytes: 64}})
+	service := NewService(ServiceConfig{Limits: Limits{MaxSnapshotBodyBytes: 64}})
 	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
 	launchToken, err := service.NewLaunchToken()
 	if err != nil {

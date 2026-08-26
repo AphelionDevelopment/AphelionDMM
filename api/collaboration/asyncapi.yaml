@@ -15,6 +15,7 @@ channels:
       operation_submit: { $ref: '#/components/messages/operation_submit' }
       inverse_request: { $ref: '#/components/messages/inverse_request' }
       presence_update: { $ref: '#/components/messages/presence_update' }
+      profile_update: { $ref: '#/components/messages/profile_update' }
       acknowledged_revision: { $ref: '#/components/messages/acknowledged_revision' }
       ping: { $ref: '#/components/messages/ping' }
       joined: { $ref: '#/components/messages/joined' }
@@ -33,6 +34,7 @@ operations:
       - { $ref: '#/channels/collaboration/messages/operation_submit' }
       - { $ref: '#/channels/collaboration/messages/inverse_request' }
       - { $ref: '#/channels/collaboration/messages/presence_update' }
+      - { $ref: '#/channels/collaboration/messages/profile_update' }
       - { $ref: '#/channels/collaboration/messages/acknowledged_revision' }
       - { $ref: '#/channels/collaboration/messages/ping' }
   sendServerMessages:
@@ -53,6 +55,7 @@ components:
     operation_submit: { name: operation_submit, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
     inverse_request: { name: inverse_request, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
     presence_update: { name: presence_update, payload: { $ref: '#/components/schemas/Envelope' } }
+    profile_update: { name: profile_update, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
     acknowledged_revision: { name: acknowledged_revision, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
     ping: { name: ping, payload: { $ref: '#/components/schemas/ClientEnvelope' } }
     joined:
@@ -95,7 +98,7 @@ components:
         - type: object
           properties:
             type:
-              enum: [join, operation_submit, inverse_request, presence_update, acknowledged_revision, ping]
+              enum: [join, operation_submit, inverse_request, presence_update, profile_update, acknowledged_revision, ping]
     ServerEnvelope:
       allOf:
         - { $ref: '#/components/schemas/Envelope' }

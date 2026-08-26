@@ -18,10 +18,11 @@ import (
 )
 
 type RunConfig struct {
-	Endpoint   string
-	Origin     string
-	SessionID  string
-	OwnerToken string
+	Endpoint     string
+	Origin       string
+	SessionID    string
+	OwnerToken   string
+	EditorTokens []string
 }
 
 type Result struct {
@@ -52,12 +53,27 @@ func Run(ctx context.Context, config RunConfig, scenario Scenario) (Result, erro
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	tokens := make([]string, len(scenario.Actors))
-	for index := range tokens {
-		token, err := mintEditorToken(ctx, client, config, index)
-		if err != nil {
-			return Result{}, err
+	if len(config.EditorTokens) > 0 {
+		if len(config.EditorTokens) != len(tokens) {
+			return Result{}, fmt.Errorf("hosted editor credential count must match scenario client count")
 		}
-		tokens[index] = token
+		for index, token := range config.EditorTokens {
+			if token == "" {
+				return Result{}, fmt.Errorf("hosted editor credential %d is empty", index+1)
+			}
+			if err := provisionHostedEditor(ctx, client, config, token); err != nil {
+				return Result{}, fmt.Errorf("provision hosted editor %d: %w", index+1, err)
+			}
+			tokens[index] = token
+		}
+	} else {
+		for index := range tokens {
+			token, err := mintEditorToken(ctx, client, config, index)
+			if err != nil {
+				return Result{}, err
+			}
+			tokens[index] = token
+		}
 	}
 	connections := make([]*websocket.Conn, 0, len(tokens))
 	defer func() {
@@ -135,6 +151,53 @@ func Run(ctx context.Context, config RunConfig, scenario Scenario) (Result, erro
 	result.Diverged = result.FinalRevision != scenario.ExpectedRevision || result.FinalMapHash != scenario.ExpectedMapHash
 	result.GatePassed = !result.Diverged && result.AcceptedOperations == len(scenario.Operations) && (scenario.Config.MaximumP95AcknowledgementMilliseconds == 0 || result.P95AcknowledgementMillis <= float64(scenario.Config.MaximumP95AcknowledgementMilliseconds))
 	return result, nil
+}
+
+func provisionHostedEditor(ctx context.Context, client *http.Client, config RunConfig, editorToken string) error {
+	body := []byte(`{"role":"editor"}`)
+	invitationURL := strings.TrimRight(config.Endpoint, "/") + "/v1/sessions/" + url.PathEscape(config.SessionID) + "/hosted-invitations"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, invitationURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+config.OwnerToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		return fmt.Errorf("create hosted invitation returned HTTP %d", response.StatusCode)
+	}
+	var invitation struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&invitation); err != nil {
+		return fmt.Errorf("decode hosted invitation: %w", err)
+	}
+	if invitation.Token == "" {
+		return fmt.Errorf("decode hosted invitation: response token is empty")
+	}
+	redeemBody, err := json.Marshal(map[string]string{"token": invitation.Token})
+	if err != nil {
+		return err
+	}
+	redeemRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, invitationURL+"/redeem", bytes.NewReader(redeemBody))
+	if err != nil {
+		return err
+	}
+	redeemRequest.Header.Set("Authorization", "Bearer "+editorToken)
+	redeemRequest.Header.Set("Content-Type", "application/json")
+	redeemResponse, err := client.Do(redeemRequest)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = redeemResponse.Body.Close() }()
+	if redeemResponse.StatusCode != http.StatusOK {
+		return fmt.Errorf("redeem hosted invitation returned HTTP %d", redeemResponse.StatusCode)
+	}
+	return nil
 }
 
 func waitContext(ctx context.Context, duration time.Duration) error {

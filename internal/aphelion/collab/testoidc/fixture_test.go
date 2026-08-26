@@ -83,6 +83,40 @@ func TestFixtureCompletesOneUseConfidentialPKCEFlow(t *testing.T) {
 	}
 }
 
+func TestInteractiveFixtureCapturesDistinctPilotIdentity(t *testing.T) {
+	fixture, err := New(Config{
+		Issuer: "https://issuer.example", ClientID: "client-id", ClientSecret: "client-secret",
+		RedirectURL: "https://maps.example/v1/auth/complete", Subject: "default-subject", DisplayName: "Default Mapper",
+		InteractiveIdentities: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := url.Values{
+		"client_id": {"client-id"}, "redirect_uri": {"https://maps.example/v1/auth/complete"},
+		"response_type": {"code"}, "scope": {"openid profile"}, "state": {"state-value"},
+		"nonce": {"nonce-value"}, "code_challenge": {"challenge-value"}, "code_challenge_method": {"S256"},
+	}
+	identityForm := httptest.NewRecorder()
+	fixture.Handler().ServeHTTP(identityForm, httptest.NewRequest(http.MethodGet, "/authorize?"+values.Encode(), nil))
+	if identityForm.Code != http.StatusOK || !strings.Contains(identityForm.Body.String(), "Pilot display name") {
+		t.Fatalf("interactive identity form status/body = %d/%q", identityForm.Code, identityForm.Body.String())
+	}
+	values.Set("fixture_subject", "pilot-two")
+	values.Set("fixture_display_name", "Pilot Two")
+	authorized := httptest.NewRecorder()
+	fixture.Handler().ServeHTTP(authorized, httptest.NewRequest(http.MethodGet, "/authorize?"+values.Encode(), nil))
+	redirect, err := url.Parse(authorized.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := redirect.Query().Get("code")
+	stored := fixture.codes[sha256.Sum256([]byte(code))]
+	if authorized.Code != http.StatusFound || stored.subject != "pilot-two" || stored.displayName != "Pilot Two" {
+		t.Fatalf("interactive identity authorization = status %d stored %#v", authorized.Code, stored)
+	}
+}
+
 func TestLocalTLSCertificateTrustsDockerHostName(t *testing.T) {
 	certificate, roots, err := GenerateLocalTLSCertificate([]string{"host.docker.internal", "localhost"}, time.Now())
 	if err != nil {

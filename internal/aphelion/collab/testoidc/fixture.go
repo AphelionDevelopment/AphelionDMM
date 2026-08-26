@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"html/template"
 	"math/big"
 	"net"
 	"net/http"
@@ -30,13 +31,37 @@ const (
 )
 
 type Config struct {
-	Issuer       string
-	ClientID     string
-	ClientSecret string
-	RedirectURL  string
-	Subject      string
-	DisplayName  string
-	Now          func() time.Time
+	Issuer                string
+	ClientID              string
+	ClientSecret          string
+	RedirectURL           string
+	Subject               string
+	DisplayName           string
+	InteractiveIdentities bool
+	Now                   func() time.Time
+}
+
+var identityFormTemplate = template.Must(template.New("pilot-identity").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>AphelionDMM pilot sign-in</title></head>
+<body><main><h1>AphelionDMM pilot sign-in</h1><p>This disposable local identity is only for multiplayer testing.</p>
+<form method="get" action="/authorize">
+<input type="hidden" name="client_id" value="{{.ClientID}}"><input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+<input type="hidden" name="response_type" value="{{.ResponseType}}"><input type="hidden" name="scope" value="{{.Scope}}">
+<input type="hidden" name="state" value="{{.State}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
+<input type="hidden" name="code_challenge" value="{{.CodeChallenge}}"><input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
+<label>Pilot identifier <input name="fixture_subject" required maxlength="128" autocomplete="username"></label><br>
+<label>Pilot display name <input name="fixture_display_name" required maxlength="128" autocomplete="name"></label><br>
+<button type="submit">Continue</button></form></main></body></html>`))
+
+type identityFormData struct {
+	ClientID            string
+	RedirectURI         string
+	ResponseType        string
+	Scope               string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
 }
 
 type authorizationCode struct {
@@ -118,6 +143,27 @@ func (fixture *Fixture) handleAuthorize(writer http.ResponseWriter, request *htt
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	subject := fixture.config.Subject
+	displayName := fixture.config.DisplayName
+	if fixture.config.InteractiveIdentities {
+		subject = strings.TrimSpace(query.Get("fixture_subject"))
+		displayName = strings.TrimSpace(query.Get("fixture_display_name"))
+		if subject == "" && displayName == "" {
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.Header().Set("Cache-Control", "no-store")
+			if err := identityFormTemplate.Execute(writer, identityFormData{
+				ClientID: query.Get("client_id"), RedirectURI: query.Get("redirect_uri"), ResponseType: query.Get("response_type"), Scope: query.Get("scope"),
+				State: query.Get("state"), Nonce: query.Get("nonce"), CodeChallenge: query.Get("code_challenge"), CodeChallengeMethod: query.Get("code_challenge_method"),
+			}); err != nil {
+				return
+			}
+			return
+		}
+		if subject == "" || displayName == "" || len(subject) > 128 || len(displayName) > 128 {
+			writeOAuthError(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+	}
 	code, err := randomCredential()
 	if err != nil {
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error")
@@ -126,8 +172,8 @@ func (fixture *Fixture) handleAuthorize(writer http.ResponseWriter, request *htt
 	fixture.mutex.Lock()
 	fixture.cleanupCodes(fixture.config.Now())
 	fixture.codes[sha256.Sum256([]byte(code))] = authorizationCode{
-		challenge: query.Get("code_challenge"), nonce: query.Get("nonce"), subject: fixture.config.Subject,
-		displayName: fixture.config.DisplayName, expiresAt: fixture.config.Now().Add(5 * time.Minute),
+		challenge: query.Get("code_challenge"), nonce: query.Get("nonce"), subject: subject,
+		displayName: displayName, expiresAt: fixture.config.Now().Add(5 * time.Minute),
 	}
 	fixture.mutex.Unlock()
 	redirect, _ := url.Parse(fixture.config.RedirectURL)

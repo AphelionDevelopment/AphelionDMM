@@ -96,6 +96,18 @@ func (manager *PresenceManager) Remove(actorID model.ActorID) {
 	delete(manager.current, actorID)
 }
 
+func (manager *PresenceManager) Rename(principal Principal) {
+	manager.mutex.Lock()
+	defer manager.mutex.Unlock()
+	current, exists := manager.current[principal.ActorID()]
+	if !exists {
+		return
+	}
+	current.DisplayName = principal.DisplayName()
+	manager.current[principal.ActorID()] = current
+	manager.publish(current)
+}
+
 func (manager *PresenceManager) Expire(now time.Time) int {
 	manager.mutex.Lock()
 	defer manager.mutex.Unlock()

@@ -11,13 +11,13 @@ This record covers the locally built hosted OCI image, its hardened runtime sett
 The image was built from the digest-pinned Go 1.25.13 Bookworm builder and distroless Debian 13 non-root runtime in `deploy/container/Dockerfile`:
 
 ```text
-docker build --file deploy/container/Dockerfile --build-arg APHELIONDMM_BUILD=local-verification-3 --build-arg APHELIONDMM_REVISION=763e341fcd0efacd1b19ce013645564144d5cb6f --tag apheliondmm-hosted:local-verification .
+docker build --file deploy/container/Dockerfile --build-arg APHELIONDMM_BUILD=local-large-map-repair --build-arg APHELIONDMM_REVISION=3fde584d1f3ee073b414b9e9805976cba74626e5 --tag apheliondmm-hosted:local-verification .
 ```
 
 Result:
 
-- image manifest-list ID: `sha256:2584c4b4c0d50d251ed4a492d950e0e974d028f627e3a0962c5367bd1da986ef`;
-- compressed size reported by Docker: 10,739,202 bytes;
+- image manifest-list ID: `sha256:13ba75f18d3559a2db5624fa1a1aa92c137e45027f7defb995e70909d3609bd1`;
+- image size reported by Docker: 10,739,668 bytes;
 - runtime user: `nonroot:nonroot`;
 - entry point: `/apheliondmm-hosted`;
 - the runtime layer contains the hosted binary and compiled health-check binary, with no shell or package manager.
@@ -33,7 +33,7 @@ $env:APHELION_CONTAINER_TEST_IMAGE = 'apheliondmm-hosted:local-verification'
 go test -tags=container ./internal/aphelion/collab/container -run '^TestHostedImageLifecycle$' -count=1 -timeout=5m -v
 ```
 
-The final local run passed in 7.14 seconds. The gate starts unique disposable containers and a private TLS issuer/OTLP sink, then verifies:
+The latest local run passed in 8.25 seconds after the route-specific large-map snapshot repair. The gate starts unique disposable containers and a private TLS issuer/OTLP sink, then verifies:
 
 - OIDC discovery and confidential Authorization Code with S256 PKCE against a locally generated CA;
 - signed token, issuer, audience, nonce, state, and callback handling through the running image;

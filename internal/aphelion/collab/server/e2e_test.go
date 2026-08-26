@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
+	collabstore "sdmm/internal/aphelion/collab/store"
 )
 
 func TestTwoClientsConverge(t *testing.T) {
@@ -125,6 +128,172 @@ func TestTwoClientsConverge(t *testing.T) {
 	if hashA != hashB || hashA != serverHash || serverSnapshot.Revision != 4 {
 		t.Fatalf("convergence failed: A=%s B=%s server=%s revision=%d", hashA, hashB, serverHash, serverSnapshot.Revision)
 	}
+}
+
+func TestWebSocketReplayLiveOverlapDeliversAcceptedOperationOnce(t *testing.T) {
+	snapshot := testSnapshot(t, 2)
+	store := newReplayBlockingStore()
+	service := NewService(ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}, Store: store, OnWebSocketError: func(error) {}})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	launchToken, err := service.NewLaunchToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	created := createTestSession(t, testServer.URL, launchToken, snapshot)
+	owner := connectTestClient(t, testServer.URL, created.SessionID, created.OwnerToken, 0)
+	t.Cleanup(func() { _ = owner.CloseNow() })
+	editorToken := createTestJoinToken(t, testServer.URL, created.SessionID, created.OwnerToken, RoleEditor, "Editor")
+
+	store.armLoad()
+	websocketURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/v1/collaboration"
+	joining, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + editorToken}, "Origin": []string{"http://127.0.0.1"}},
+		Subprotocols: []string{WebSocketSubprotocol},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = joining.CloseNow() })
+	writeClientEnvelope(t, joining, protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "overlap-join", SessionID: created.SessionID, Type: protocol.ClientJoin}, protocol.JoinPayload{JoinToken: editorToken, AcknowledgedRevision: 0})
+	if joined := readServerEnvelope(t, joining); joined.Envelope.Type != protocol.ServerJoined {
+		t.Fatalf("first message = %q, want joined", joined.Envelope.Type)
+	}
+	store.waitForLoad(t)
+
+	operation := testOperation(t, snapshot, 1)
+	submitTestOperation(t, owner, created.SessionID, "overlap-operation", operation)
+	acceptedByOwner := readAccepted(t, owner)
+	store.releaseLoad()
+
+	acceptedCount := 0
+	for acceptedCount == 0 {
+		message := readServerEnvelope(t, joining)
+		if message.Envelope.Type == protocol.ServerOperationAccepted {
+			accepted := message.Payload.(*protocol.OperationAcceptedPayload).Operation
+			if accepted.OperationID != acceptedByOwner.OperationID {
+				t.Fatalf("accepted operation = %q, want %q", accepted.OperationID, acceptedByOwner.OperationID)
+			}
+			acceptedCount++
+		}
+	}
+	readContext, cancelRead := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancelRead()
+	for {
+		_, data, readErr := joining.Read(readContext)
+		if readErr != nil {
+			if errors.Is(readErr, context.DeadlineExceeded) {
+				break
+			}
+			t.Fatal(readErr)
+		}
+		decoded, decodeErr := protocol.DecodeServer(data)
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if decoded.Envelope.Type == protocol.ServerOperationAccepted {
+			acceptedCount++
+		}
+	}
+	if acceptedCount != 1 {
+		t.Fatalf("accepted operation deliveries = %d, want 1", acceptedCount)
+	}
+}
+
+func TestEmbeddedSessionUsesRequestedOwnerDisplayName(t *testing.T) {
+	snapshot := testSnapshot(t, 1)
+	service := NewService(ServiceConfig{AllowedOrigins: []string{"http://127.0.0.1"}})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	launchToken, err := service.NewLaunchToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot, "display_name": "Zoe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, testServer.URL+"/v1/sessions", launchToken, body)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
+	var created CreateSessionResponse
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	service.hub.mutex.RLock()
+	members := service.hub.sessions[created.SessionID].members
+	service.hub.mutex.RUnlock()
+	if len(members) != 1 {
+		t.Fatalf("members = %d, want 1", len(members))
+	}
+	for _, member := range members {
+		if member.DisplayName() != "Zoe" {
+			t.Fatalf("owner display name = %q, want Zoe", member.DisplayName())
+		}
+	}
+}
+
+type replayBlockingStore struct {
+	collabstore.SessionStore
+	mutex   sync.Mutex
+	armed   bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newReplayBlockingStore() *replayBlockingStore {
+	return &replayBlockingStore{SessionStore: collabstore.NewMemoryStore()}
+}
+
+func (store *replayBlockingStore) armLoad() {
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	store.armed = true
+	store.entered = make(chan struct{})
+	store.release = make(chan struct{})
+}
+
+func (store *replayBlockingStore) waitForLoad(t *testing.T) {
+	t.Helper()
+	store.mutex.Lock()
+	entered := store.entered
+	store.mutex.Unlock()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("joining WebSocket did not reach replay load")
+	}
+}
+
+func (store *replayBlockingStore) releaseLoad() {
+	store.mutex.Lock()
+	release := store.release
+	store.mutex.Unlock()
+	close(release)
+}
+
+func (store *replayBlockingStore) Load(ctx context.Context, documentID model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
+	store.mutex.Lock()
+	armed := store.armed
+	if armed {
+		store.armed = false
+		entered := store.entered
+		release := store.release
+		close(entered)
+		store.mutex.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return model.Snapshot{}, nil, ctx.Err()
+		}
+	} else {
+		store.mutex.Unlock()
+	}
+	return store.SessionStore.Load(ctx, documentID)
 }
 
 func createTestSession(t *testing.T, baseURL, launchToken string, snapshot model.Snapshot) CreateSessionResponse {

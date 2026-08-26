@@ -3,15 +3,20 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"sdmm/internal/aphelion/collab/auth"
 	"sdmm/internal/aphelion/collab/model"
 	collabstore "sdmm/internal/aphelion/collab/store"
 )
+
+const desktopAuthHandoffTTL = 5 * time.Minute
 
 type HostedSessionResponse struct {
 	SessionID  string           `json:"session_id"`
@@ -38,6 +43,61 @@ func (service *Service) handleHostedAuthBegin(writer http.ResponseWriter, reques
 	writeJSON(writer, http.StatusOK, map[string]string{"authorization_url": result.AuthorizationURL})
 }
 
+func (service *Service) handleHostedDesktopAuthBegin(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	if service.config.HostedLogin == nil {
+		writeError(writer, http.StatusServiceUnavailable, "unavailable", "hosted authentication is unavailable")
+		return
+	}
+	if !service.joinLimiter.Allow("desktop-auth-begin:"+remoteIP(request), service.config.Now()) {
+		writeError(writer, http.StatusTooManyRequests, "rate_limited", "hosted authentication rate limit exceeded")
+		return
+	}
+	service.mutex.Lock()
+	service.cleanupDesktopAuthHandoffsLocked(service.config.Now())
+	atCapacity := len(service.desktopHandoffs) >= service.limits.RateEntries
+	service.mutex.Unlock()
+	if atCapacity {
+		writeError(writer, http.StatusServiceUnavailable, "unavailable", "desktop authentication capacity is exhausted")
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
+	var body struct {
+		VerifierChallenge string `json:"verifier_challenge"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeHostedDecodeError(writer, err, "invalid desktop authentication request")
+		return
+	}
+	challenge, err := base64.RawURLEncoding.DecodeString(body.VerifierChallenge)
+	if err != nil || len(challenge) != sha256.Size {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "desktop verifier challenge is invalid")
+		return
+	}
+	result, err := service.config.HostedLogin.Begin(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "unavailable", "hosted authentication could not start")
+		return
+	}
+	handoffID, err := randomToken()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal", "desktop authentication handoff could not start")
+		return
+	}
+	handoffHash := sha256.Sum256([]byte(handoffID))
+	stateHash := sha256.Sum256([]byte(result.State))
+	var challengeHash [sha256.Size]byte
+	copy(challengeHash[:], challenge)
+	service.mutex.Lock()
+	service.cleanupDesktopAuthHandoffsLocked(service.config.Now())
+	service.desktopHandoffs[handoffHash] = desktopAuthHandoff{challenge: challengeHash, stateHash: stateHash, expiresAt: service.config.Now().Add(desktopAuthHandoffTTL)}
+	service.desktopAuthStates[stateHash] = handoffHash
+	service.mutex.Unlock()
+	writeJSON(writer, http.StatusOK, map[string]string{"authorization_url": result.AuthorizationURL, "handoff_id": handoffID})
+}
+
 func (service *Service) handleHostedAuthComplete(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	if service.config.HostedLogin == nil {
@@ -50,12 +110,89 @@ func (service *Service) handleHostedAuthComplete(writer http.ResponseWriter, req
 		writeError(writer, http.StatusBadRequest, "invalid_request", "OIDC callback is invalid")
 		return
 	}
+	stateHash := sha256.Sum256([]byte(state))
+	service.mutex.Lock()
+	handoffHash, desktop := service.desktopAuthStates[stateHash]
+	handoff, handoffExists := service.desktopHandoffs[handoffHash]
+	desktopExpired := desktop && (!handoffExists || !service.config.Now().Before(handoff.expiresAt))
+	if desktopExpired {
+		delete(service.desktopAuthStates, stateHash)
+		delete(service.desktopHandoffs, handoffHash)
+	}
+	service.mutex.Unlock()
+	if desktopExpired {
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "desktop authentication handoff is invalid or expired")
+		return
+	}
 	session, err := service.config.HostedLogin.Complete(request.Context(), state, code)
 	if err != nil {
+		if desktop {
+			service.mutex.Lock()
+			delete(service.desktopAuthStates, stateHash)
+			delete(service.desktopHandoffs, handoffHash)
+			service.mutex.Unlock()
+		}
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "OIDC callback was rejected")
 		return
 	}
+	service.mutex.Lock()
+	if desktop {
+		delete(service.desktopAuthStates, stateHash)
+		handoff, exists := service.desktopHandoffs[handoffHash]
+		if exists && service.config.Now().Before(handoff.expiresAt) {
+			completed := session
+			handoff.session = &completed
+			service.desktopHandoffs[handoffHash] = handoff
+			service.mutex.Unlock()
+			writeJSON(writer, http.StatusOK, map[string]string{"status": "complete"})
+			return
+		}
+	}
+	service.mutex.Unlock()
 	writeJSON(writer, http.StatusOK, map[string]any{"token": session.Token, "actor_id": session.ActorID, "display_name": session.DisplayName, "expires_at": session.ExpiresAt})
+}
+
+func (service *Service) handleHostedDesktopAuthExchange(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
+	var body struct {
+		HandoffID string `json:"handoff_id"`
+		Verifier  string `json:"verifier"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.HandoffID == "" || body.Verifier == "" || len(body.HandoffID) > 128 || len(body.Verifier) > 256 {
+		writeHostedDecodeError(writer, err, "invalid desktop authentication exchange")
+		return
+	}
+	handoffHash := sha256.Sum256([]byte(body.HandoffID))
+	verifierHash := sha256.Sum256([]byte(body.Verifier))
+	service.mutex.Lock()
+	service.cleanupDesktopAuthHandoffsLocked(service.config.Now())
+	handoff, exists := service.desktopHandoffs[handoffHash]
+	if !exists || subtle.ConstantTimeCompare(verifierHash[:], handoff.challenge[:]) != 1 {
+		service.mutex.Unlock()
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "desktop authentication handoff is invalid or expired")
+		return
+	}
+	if handoff.session == nil {
+		service.mutex.Unlock()
+		writeJSON(writer, http.StatusAccepted, map[string]string{"status": "pending"})
+		return
+	}
+	session := *handoff.session
+	delete(service.desktopHandoffs, handoffHash)
+	service.mutex.Unlock()
+	writeJSON(writer, http.StatusOK, map[string]any{"token": session.Token, "actor_id": session.ActorID, "display_name": session.DisplayName, "expires_at": session.ExpiresAt})
+}
+
+func (service *Service) cleanupDesktopAuthHandoffsLocked(now time.Time) {
+	for handoffHash, handoff := range service.desktopHandoffs {
+		if !now.Before(handoff.expiresAt) {
+			delete(service.desktopHandoffs, handoffHash)
+			delete(service.desktopAuthStates, handoff.stateHash)
+		}
+	}
 }
 
 func (service *Service) handleHostedAuthLogout(writer http.ResponseWriter, request *http.Request) {
@@ -76,7 +213,7 @@ func (service *Service) handleCreateHostedSession(writer http.ResponseWriter, re
 		writeError(writer, http.StatusServiceUnavailable, "unavailable", "hosted collaboration is unavailable")
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxSnapshotBodyBytes)
 	var body struct {
 		Snapshot model.Snapshot `json:"snapshot"`
 	}

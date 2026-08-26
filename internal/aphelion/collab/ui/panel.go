@@ -23,6 +23,7 @@ type PanelApp interface {
 	HasActiveCollaboration() bool
 	DoLeaveCollaborationSession()
 	DoRetryCollaborationSession()
+	DoUpdateCollaborationDisplayName(string)
 	DoCopyCollaborationInvitation(InvitationRole, string)
 	DoResolveCollaborationConflict(model.OperationID, ConflictAction)
 }
@@ -32,11 +33,13 @@ type Panel struct {
 
 	app         PanelApp
 	inviteeName string
+	displayName string
 }
 
 func (panel *Panel) Init(app PanelApp) {
 	panel.app = app
 	panel.inviteeName = "Collaborator"
+	panel.displayName = "Mapper"
 }
 
 func (panel *Panel) Process(int32) {
@@ -57,6 +60,13 @@ func (panel *Panel) Process(int32) {
 		imgui.Separator()
 		imgui.TextWrapped("Error: " + view.ErrorText)
 	}
+	imgui.Separator()
+	imgui.Text("Your display name")
+	w.InputTextWithHint("##collaboration-display-name", "Display name", &panel.displayName).Width(-1).Build()
+	displayName := strings.TrimSpace(panel.displayName)
+	w.Disabled(displayName == "", w.Button("Update Name", func() {
+		panel.app.DoUpdateCollaborationDisplayName(displayName)
+	})).Build()
 
 	imgui.Separator()
 	imgui.Text("Participants")

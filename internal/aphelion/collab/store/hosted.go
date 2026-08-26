@@ -60,6 +60,7 @@ type HostedRegistry interface {
 	ListHostedSessions(context.Context) ([]HostedSession, error)
 	ListHostedMembers(context.Context, string) ([]HostedMember, error)
 	ResolveHostedMember(context.Context, string, string, string) (HostedMember, bool, error)
+	UpdateHostedMemberDisplayName(context.Context, string, model.ActorID, string) error
 	CreateHostedInvitation(context.Context, HostedInvitation) error
 	RedeemHostedInvitation(context.Context, string, [sha256.Size]byte, HostedIdentity, time.Time) (HostedMember, error)
 }

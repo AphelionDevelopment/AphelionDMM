@@ -1,0 +1,104 @@
+name: apheliondmm-desktop-pilot
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    environment:
+      POSTGRES_DB: aphelion_pilot
+      POSTGRES_USER: aphelion_pilot
+      POSTGRES_PASSWORD: local-pilot-database-only
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U aphelion_pilot -d aphelion_pilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks: [pilot]
+
+  oidc:
+    build:
+      context: ../..
+      dockerfile: deploy/pilot/Dockerfile
+      target: oidc-fixture
+    command:
+      - -listen
+      - 0.0.0.0:9443
+      - -issuer
+      - https://localhost:9443
+      - -redirect-url
+      - https://localhost:8443/v1/auth/complete
+      - -client-id
+      - apheliondmm-desktop-pilot
+      - -ca-file
+      - /tls/oidc-root.crt
+      - -interactive-identities
+    environment:
+      APHELIONDMM_OIDC_FIXTURE_CLIENT_SECRET: local-pilot-oidc-only
+    volumes:
+      - oidc-tls:/tls
+    ports:
+      - "127.0.0.1:9443:9443"
+    restart: on-failure:5
+    networks: [pilot]
+
+  hosted:
+    build:
+      context: ../..
+      dockerfile: deploy/pilot/Dockerfile
+      target: hosted
+      args:
+        APHELIONDMM_BUILD: desktop-pilot
+        APHELIONDMM_REVISION: working-tree
+    command: ["-config", "/etc/apheliondmm/config.yaml"]
+    environment:
+      APHELIONDMM_DATABASE_DSN: postgres://aphelion_pilot:local-pilot-database-only@postgres:5432/aphelion_pilot?sslmode=disable
+      APHELIONDMM_OIDC_CLIENT_SECRET: local-pilot-oidc-only
+      SSL_CERT_FILE: /fixture-tls/oidc-root.crt
+    configs:
+      - source: hosted-config
+        target: /etc/apheliondmm/config.yaml
+        mode: 0444
+    volumes:
+      - oidc-tls:/fixture-tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oidc:
+        condition: service_started
+    restart: on-failure:5
+    network_mode: service:oidc
+
+  edge:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+        mode: 0444
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "127.0.0.1:8443:8443"
+    depends_on:
+      hosted:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [pilot]
+
+configs:
+  hosted-config:
+    file: ./config.yaml
+  caddyfile:
+    file: ./Caddyfile
+
+volumes:
+  postgres-data:
+  oidc-tls:
+  caddy-data:
+  caddy-config:
+
+networks:
+  pilot:
+    driver: bridge

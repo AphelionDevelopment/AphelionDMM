@@ -87,6 +87,142 @@ func TestNetworkExecutorAcceptRejectAndInverse(t *testing.T) {
 	}
 }
 
+func TestNetworkExecutorIgnoresExactAcceptedDuplicate(t *testing.T) {
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeTransport()
+	network, err := NewNetworkExecutor(transport, snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, executeErr := network.Execute(context.Background(), projectionOperation(t, snapshot, 1))
+		result <- executeErr
+	}()
+	submitted := transport.next(t)
+	decoded, err := protocol.DecodeClient(mustJSON(t, submitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := decoded.Payload.(*protocol.OperationSubmitPayload).Operation
+	accepted := model.AcceptedOperation{Operation: operation, Revision: 1, AcceptedAt: time.Unix(1, 0)}
+	after := snapshotWithOperation(t, snapshot, accepted)
+	mapHash, err := after.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})
+	network.Receive(envelope)
+	if executeErr := <-result; executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	network.Receive(envelope)
+
+	network.mutex.Lock()
+	terminal := network.terminal
+	network.mutex.Unlock()
+	if terminal != nil {
+		t.Fatalf("exact accepted duplicate terminated executor: %v", terminal)
+	}
+	current, err := network.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != accepted.Revision {
+		t.Fatalf("snapshot revision = %d, want %d", current.Revision, accepted.Revision)
+	}
+}
+
+func TestNetworkExecutorSuspendsOnAlteredAcceptedDuplicate(t *testing.T) {
+	network, accepted, mapHash := acceptedNetworkFixture(t)
+	altered := model.CloneAcceptedOperation(accepted)
+	altered.Operation.Changes[0].After.Prefabs[0].Path = "/turf/open/floor/iron"
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: altered, MapHash: mapHash})); err == nil {
+		t.Fatal("altered accepted duplicate was ignored")
+	}
+	network.mutex.Lock()
+	suspended, terminal := network.suspended, network.terminal
+	network.mutex.Unlock()
+	if suspended == nil || terminal != nil {
+		t.Fatalf("altered duplicate state = suspended %v terminal %v", suspended, terminal)
+	}
+}
+
+func TestNetworkExecutorSuspendsOnAcceptedDuplicateWithWrongHash(t *testing.T) {
+	network, accepted, _ := acceptedNetworkFixture(t)
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: strings.Repeat("f", 64)})); err == nil {
+		t.Fatal("accepted duplicate with wrong hash was ignored")
+	}
+	network.mutex.Lock()
+	suspended, terminal := network.suspended, network.terminal
+	network.mutex.Unlock()
+	if suspended == nil || terminal != nil {
+		t.Fatalf("wrong-hash duplicate state = suspended %v terminal %v", suspended, terminal)
+	}
+}
+
+func acceptedNetworkFixture(t *testing.T) (*NetworkExecutor, model.AcceptedOperation, string) {
+	t.Helper()
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeTransport()
+	network, err := NewNetworkExecutor(transport, snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, executeErr := network.Execute(context.Background(), projectionOperation(t, snapshot, 1))
+		result <- executeErr
+	}()
+	decoded, err := protocol.DecodeClient(mustJSON(t, transport.next(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := model.AcceptedOperation{Operation: decoded.Payload.(*protocol.OperationSubmitPayload).Operation, Revision: 1, AcceptedAt: time.Unix(1, 0)}
+	after := snapshotWithOperation(t, snapshot, accepted)
+	mapHash, err := after.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	return network, accepted, mapHash
+}
+
+func TestNetworkExecutorSuspendsOnAcceptedRevisionGap(t *testing.T) {
+	snapshot := projectionSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	network, err := NewNetworkExecutor(newFakeTransport(), snapshot, actorID, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := projectionOperation(t, snapshot, 1)
+	accepted := model.AcceptedOperation{Operation: operation, Revision: snapshot.Revision + 2, AcceptedAt: time.Unix(1, 0)}
+	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: strings.Repeat("a", 64)}))
+	network.mutex.Lock()
+	terminal := network.terminal
+	suspended := network.suspended
+	network.mutex.Unlock()
+	if terminal != nil || suspended == nil {
+		t.Fatalf("revision gap state = terminal %v, suspended %v; want recoverable suspension", terminal, suspended)
+	}
+}
+
 func TestNetworkExecutorConflictRefreshDiscardAndRebuild(t *testing.T) {
 	t.Parallel()
 

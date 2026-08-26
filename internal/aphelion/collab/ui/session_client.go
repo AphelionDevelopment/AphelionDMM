@@ -50,6 +50,7 @@ type SessionClient struct {
 	participants            map[model.ActorID]ObservedPresence
 	presenceInterval        time.Duration
 	presenceSequence        uint64
+	profileSequence         uint64
 	nextPresenceAt          time.Time
 	pendingPresence         *protocol.PresenceUpdatePayload
 	cancelPresence          func()
@@ -58,6 +59,11 @@ type SessionClient struct {
 	resumptionExpiresAt     time.Time
 	administrationToken     string
 	administrationExpiresAt time.Time
+	hostedCredential        string
+	hostedCredentialExpires time.Time
+	hostedDisplayName       string
+	hostedBaseURL           string
+	hostedSession           bool
 	baseURL                 string
 	origin                  string
 	documentID              model.DocumentID
@@ -101,10 +107,18 @@ func NewSessionClient(config SessionClientConfig) *SessionClient {
 }
 
 func (client *SessionClient) Create(ctx context.Context, baseURL, launchToken string, snapshot model.Snapshot) (Invitation, error) {
+	return client.CreateNamed(ctx, baseURL, launchToken, snapshot, "Owner")
+}
+
+func (client *SessionClient) CreateNamed(ctx context.Context, baseURL, launchToken string, snapshot model.Snapshot, displayName string) (Invitation, error) {
 	if launchToken == "" {
 		return Invitation{}, fmt.Errorf("collaboration launch token is empty")
 	}
-	body, err := json.Marshal(map[string]any{"snapshot": snapshot})
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" || len(displayName) > protocol.MaxDisplayNameBytes {
+		return Invitation{}, fmt.Errorf("collaboration owner display name is invalid")
+	}
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot, "display_name": displayName})
 	if err != nil {
 		return Invitation{}, err
 	}
@@ -119,6 +133,9 @@ func (client *SessionClient) Create(ctx context.Context, baseURL, launchToken st
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusCreated {
+		if response.StatusCode == http.StatusRequestEntityTooLarge {
+			return Invitation{}, fmt.Errorf("create collaboration session returned HTTP %d: snapshot request is %d bytes", response.StatusCode, len(body))
+		}
 		return Invitation{}, fmt.Errorf("create collaboration session returned HTTP %d", response.StatusCode)
 	}
 	var created struct {
@@ -228,7 +245,11 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 				nonBlockingError(errorsFound, fmt.Errorf("received operation before joined message"))
 				return
 			}
-			network.Receive(envelope)
+			if receiveErr := network.Receive(envelope); receiveErr != nil {
+				nonBlockingError(errorsFound, receiveErr)
+				_ = transport.Close(websocket.StatusInternalError, "collaboration integrity fault")
+				return
+			}
 			client.recordOperation(machine, network, decoded.Envelope.Type)
 		case protocol.ServerReplayComplete:
 			if network == nil {
@@ -280,6 +301,7 @@ func (client *SessionClient) Join(ctx context.Context, invitation Invitation) er
 	client.mutex.Lock()
 	client.transport = transport
 	client.network = joinedNetwork
+	client.hostedSession = invitation.Hosted
 	client.joining = false
 	if client.role == "owner" {
 		client.administrationToken = administrationToken
@@ -313,6 +335,7 @@ func (client *SessionClient) Leave(context.Context) error {
 	client.origin = ""
 	client.documentID = ""
 	client.actorID = ""
+	client.hostedSession = false
 	client.reconnecting = false
 	if client.cancelReconnect != nil {
 		client.cancelReconnect()
@@ -329,7 +352,11 @@ func (client *SessionClient) Leave(context.Context) error {
 	if transport == nil {
 		return nil
 	}
-	return transport.Close(websocket.StatusNormalClosure, "left collaboration session")
+	err := transport.Close(websocket.StatusNormalClosure, "left collaboration session")
+	if err == nil || errors.Is(err, net.ErrClosed) || websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+		return nil
+	}
+	return err
 }
 
 func (client *SessionClient) HasUnacknowledgedOperations() bool {
@@ -360,6 +387,7 @@ func (client *SessionClient) CreateInvitation(ctx context.Context, role Invitati
 		return Invitation{}, fmt.Errorf("collaboration invitation display name is invalid")
 	}
 	client.mutex.Lock()
+	hostedSession := client.hostedSession
 	baseURL := client.baseURL
 	origin := client.origin
 	sessionID := client.sessionID
@@ -368,6 +396,9 @@ func (client *SessionClient) CreateInvitation(ctx context.Context, role Invitati
 	machine := client.machine
 	active := client.transport != nil && client.role == "owner" && (tokenExpiresAt.IsZero() || client.config.Now().Before(tokenExpiresAt))
 	client.mutex.Unlock()
+	if hostedSession {
+		return client.createHostedInvitation(ctx, role, machine, sessionID)
+	}
 	if !active || baseURL == "" || origin == "" || sessionID == "" || token == "" {
 		return Invitation{}, fmt.Errorf("collaboration invitation is unavailable")
 	}
@@ -548,6 +579,29 @@ func (client *SessionClient) PublishPresence(ctx context.Context, cursor *model.
 	}
 	client.clearPendingPresenceLocked()
 	return client.sendPresenceLocked(ctx, payload, now)
+}
+
+func (client *SessionClient) UpdateDisplayName(ctx context.Context, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" || len(displayName) > protocol.MaxDisplayNameBytes {
+		return fmt.Errorf("collaboration display name is invalid")
+	}
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if client.transport == nil || client.sessionID == "" {
+		return collabclient.ErrTransportNotConnected
+	}
+	sequence := client.profileSequence + 1
+	payload, err := json.Marshal(protocol.ProfileUpdatePayload{DisplayName: displayName})
+	if err != nil {
+		return err
+	}
+	envelope := protocol.ClientEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: fmt.Sprintf("profile-%d", sequence), SessionID: client.sessionID, Type: protocol.ClientProfileUpdate, Payload: payload}
+	if err := client.transport.Send(ctx, envelope); err != nil {
+		return err
+	}
+	client.profileSequence = sequence
+	return nil
 }
 
 func (client *SessionClient) flushPendingPresence(generation uint64) {
@@ -809,7 +863,11 @@ func (client *SessionClient) reconnectAttempt(ctx context.Context, machine *coll
 			}
 			client.recordJoined(machine, payload)
 		case protocol.ServerOperationAccepted, protocol.ServerOperationRejected:
-			network.Receive(envelope)
+			if receiveErr := network.Receive(envelope); receiveErr != nil {
+				nonBlockingError(errorsFound, receiveErr)
+				_ = transport.Close(websocket.StatusInternalError, "collaboration integrity fault")
+				return
+			}
 			client.recordOperation(machine, network, decoded.Envelope.Type)
 		case protocol.ServerReplayComplete:
 			payload := decoded.Payload.(*protocol.ReplayCompletePayload)

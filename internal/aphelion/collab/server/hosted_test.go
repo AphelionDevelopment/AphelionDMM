@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -209,6 +210,157 @@ func TestHostedAuthenticationEndpointsDoNotExposeStateSeparately(t *testing.T) {
 	}
 }
 
+func TestHostedDesktopAuthenticationHandoffIsVerifierBoundAndSingleUse(t *testing.T) {
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := &stubHostedLogin{session: auth.Session{Token: "session-secret", ActorID: actorID, DisplayName: "Mapper", ExpiresAt: time.Now().Add(time.Hour)}}
+	service := NewService(ServiceConfig{HostedLogin: login})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	verifier := "desktop-verifier-value"
+	challengeHash := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(challengeHash[:])
+	beginBody, err := json.Marshal(map[string]string{"verifier_challenge": challenge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := postJSON(t, testServer.URL+"/v1/auth/desktop/begin", "", beginBody)
+	defer func() { _ = begin.Body.Close() }()
+	var started struct {
+		AuthorizationURL string `json:"authorization_url"`
+		HandoffID        string `json:"handoff_id"`
+	}
+	if err := json.NewDecoder(begin.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if begin.StatusCode != http.StatusOK || started.AuthorizationURL == "" || started.HandoffID == "" {
+		t.Fatalf("desktop begin = status %d body %#v", begin.StatusCode, started)
+	}
+	complete, err := http.Get(testServer.URL + "/v1/auth/complete?state=state-value&code=code-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed map[string]any
+	if err := json.NewDecoder(complete.Body).Decode(&completed); err != nil {
+		t.Fatal(err)
+	}
+	_ = complete.Body.Close()
+	if complete.StatusCode != http.StatusOK || completed["token"] != nil || completed["status"] != "complete" {
+		t.Fatalf("desktop callback = status %d body %#v", complete.StatusCode, completed)
+	}
+	exchange := func(value string) *http.Response {
+		body, marshalErr := json.Marshal(map[string]string{"handoff_id": started.HandoffID, "verifier": value})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return postJSON(t, testServer.URL+"/v1/auth/desktop/exchange", "", body)
+	}
+	wrong := exchange("wrong-verifier")
+	_ = wrong.Body.Close()
+	if wrong.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong verifier status = %d, want %d", wrong.StatusCode, http.StatusUnauthorized)
+	}
+	accepted := exchange(verifier)
+	var authenticated map[string]any
+	if err := json.NewDecoder(accepted.Body).Decode(&authenticated); err != nil {
+		t.Fatal(err)
+	}
+	_ = accepted.Body.Close()
+	if accepted.StatusCode != http.StatusOK || authenticated["token"] != "session-secret" {
+		t.Fatalf("accepted exchange = status %d body %#v", accepted.StatusCode, authenticated)
+	}
+	replayed := exchange(verifier)
+	_ = replayed.Body.Close()
+	if replayed.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replayed exchange status = %d, want %d", replayed.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestHostedDesktopAuthenticationExpiredCallbackDoesNotExposeCredential(t *testing.T) {
+	now := time.Unix(30_000, 0).UTC()
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := &stubHostedLogin{session: auth.Session{Token: "session-secret", ActorID: actorID, DisplayName: "Mapper", ExpiresAt: now.Add(time.Hour)}}
+	service := NewService(ServiceConfig{HostedLogin: login, Now: func() time.Time { return now }})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	challengeHash := sha256.Sum256([]byte("desktop-verifier-value"))
+	beginBody, err := json.Marshal(map[string]string{"verifier_challenge": base64.RawURLEncoding.EncodeToString(challengeHash[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := postJSON(t, testServer.URL+"/v1/auth/desktop/begin", "", beginBody)
+	_ = begin.Body.Close()
+	if begin.StatusCode != http.StatusOK {
+		t.Fatalf("desktop begin status = %d", begin.StatusCode)
+	}
+	now = now.Add(desktopAuthHandoffTTL + time.Second)
+	complete, err := http.Get(testServer.URL + "/v1/auth/complete?state=state-value&code=code-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed map[string]any
+	if err := json.NewDecoder(complete.Body).Decode(&completed); err != nil {
+		t.Fatal(err)
+	}
+	_ = complete.Body.Close()
+	if complete.StatusCode != http.StatusUnauthorized || completed["token"] != nil {
+		t.Fatalf("expired callback = status %d body %#v logout %q", complete.StatusCode, completed, login.loggedOut)
+	}
+}
+
+func TestHostedDesktopAuthenticationCanceledCallbackInvalidatesHandoff(t *testing.T) {
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := &stubHostedLogin{session: auth.Session{Token: "session-secret", ActorID: actorID, DisplayName: "Mapper", ExpiresAt: time.Now().Add(time.Hour)}}
+	service := NewService(ServiceConfig{HostedLogin: login})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	verifier := "desktop-verifier-value"
+	challengeHash := sha256.Sum256([]byte(verifier))
+	beginBody, err := json.Marshal(map[string]string{"verifier_challenge": base64.RawURLEncoding.EncodeToString(challengeHash[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := postJSON(t, testServer.URL+"/v1/auth/desktop/begin", "", beginBody)
+	var started struct {
+		HandoffID string `json:"handoff_id"`
+	}
+	if err := json.NewDecoder(begin.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	_ = begin.Body.Close()
+	if begin.StatusCode != http.StatusOK || started.HandoffID == "" {
+		t.Fatalf("desktop begin = status %d body %#v", begin.StatusCode, started)
+	}
+	canceled, err := http.Get(testServer.URL + "/v1/auth/complete?state=state-value&error=access_denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = canceled.Body.Close()
+	if canceled.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("canceled callback status = %d, want %d", canceled.StatusCode, http.StatusUnauthorized)
+	}
+	exchangeBody, err := json.Marshal(map[string]string{"handoff_id": started.HandoffID, "verifier": verifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := postJSON(t, testServer.URL+"/v1/auth/desktop/exchange", "", exchangeBody)
+	_ = exchange.Body.Close()
+	if exchange.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("canceled handoff exchange status = %d, want %d", exchange.StatusCode, http.StatusUnauthorized)
+	}
+}
+
 type stubHostedLogin struct {
 	session   auth.Session
 	loggedOut string
@@ -307,6 +459,19 @@ func (backend *fakeHostedBackend) ResolveHostedMember(_ context.Context, session
 	defer backend.mutex.Unlock()
 	member, found := backend.members[sessionID][issuer+"\x00"+subject]
 	return member, found, nil
+}
+
+func (backend *fakeHostedBackend) UpdateHostedMemberDisplayName(_ context.Context, sessionID string, actorID model.ActorID, displayName string) error {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	for key, member := range backend.members[sessionID] {
+		if member.ActorID == actorID {
+			member.DisplayName = displayName
+			backend.members[sessionID][key] = member
+			return nil
+		}
+	}
+	return collabstore.ErrHostedSessionMissing
 }
 
 func (backend *fakeHostedBackend) CreateHostedInvitation(_ context.Context, invitation collabstore.HostedInvitation) error {

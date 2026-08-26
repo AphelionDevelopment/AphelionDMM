@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"sdmm/internal/aphelion/collab/model"
 	collabstore "sdmm/internal/aphelion/collab/store"
 )
 
@@ -101,6 +103,29 @@ func (store *Store) ResolveHostedMember(ctx context.Context, sessionID, issuer, 
 		return collabstore.HostedMember{}, false, fmt.Errorf("resolve hosted member: %w", err)
 	}
 	return member, true, nil
+}
+
+func (store *Store) UpdateHostedMemberDisplayName(ctx context.Context, sessionID string, actorID model.ActorID, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if sessionID == "" || displayName == "" || len(displayName) > 128 {
+		return fmt.Errorf("hosted member display name is invalid")
+	}
+	if err := actorID.Validate(); err != nil {
+		return err
+	}
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return collabstore.ErrStoreClosed
+	}
+	result, err := store.pool.Exec(ctx, `UPDATE collaboration_hosted_members SET display_name = $3 WHERE session_id = $1 AND actor_id = $2`, sessionID, actorID, displayName)
+	if err != nil {
+		return fmt.Errorf("update hosted member display name: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return collabstore.ErrHostedSessionMissing
+	}
+	return nil
 }
 
 func (store *Store) CreateHostedInvitation(ctx context.Context, invitation collabstore.HostedInvitation) error {

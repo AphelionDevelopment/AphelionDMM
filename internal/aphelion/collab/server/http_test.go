@@ -76,6 +76,44 @@ func TestHTTPLaunchTokenIsSingleUseAndBodiesAreBounded(t *testing.T) {
 	}
 }
 
+func TestSessionCreationUsesSnapshotBodyLimit(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(ServiceConfig{Limits: Limits{MaxHTTPBodyBytes: 64}})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	launchToken, err := service.NewLaunchToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableID, err := model.NewStableID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := testSnapshot(t, 1)
+	snapshot.Tiles = []model.Tile{{
+		Coord: model.Coord{X: 1, Y: 1, Z: 1},
+		State: model.TileState{Prefabs: []model.PrefabState{{
+			StableID: stableID,
+			Path:     "/turf/open/floor",
+			Vars:     map[string]string{"large_fixture": strings.Repeat("x", MaxHTTPBodyBytes)},
+		}}},
+	}}
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) <= MaxHTTPBodyBytes {
+		t.Fatalf("session fixture is %d bytes, want more than %d-byte generic HTTP limit", len(body), MaxHTTPBodyBytes)
+	}
+	response := postJSON(t, testServer.URL+"/v1/sessions", launchToken, body)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
+}
+
 func TestHTTPHealthAndVersion(t *testing.T) {
 	t.Parallel()
 

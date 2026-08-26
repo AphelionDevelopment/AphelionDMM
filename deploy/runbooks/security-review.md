@@ -11,7 +11,7 @@ No wider pilot begins until every row below has an owner and current evidence. â
 | Invitation leakage/reuse | Bounded short-lived one-use credentials stored only as hashes, never URLs/logs, explicit editor/viewer role | Application | hosted server and PostgreSQL registry tests |
 | WebSocket origin/auth bypass | Exact origin allowlist, bearer auth before upgrade, session join authorization, protocol negotiation | Application/edge | server security/websocket tests |
 | Operation amplification | Message/change limits, per-actor rate limits, bounded queues, authoritative actor replacement | Application | limits and security tests |
-| Map payload bomb | HTTP/WebSocket byte limits, coordinate/count validation, canonical hash before mutation | Application | protocol/server security tests |
+| Map payload bomb | Route-specific HTTP limits (256 MiB hard ceiling only for initial snapshots), tighter administrative/WebSocket limits, coordinate/count validation, canonical hash before mutation | Application | protocol/server security tests |
 | SQL injection or revision race | Parameterized SQL, validated schema identifier, serializable/row-locked revision assignment | Database/application | PostgreSQL conformance/concurrency tests |
 | SSRF | OIDC issuer is immutable HTTPS configuration; no client-controlled server fetch URL | Application | hosted config and OIDC tests |
 | Path escape or command execution | Hosted protocol carries document IDs, not paths/commands; fixed executables only in operator workflows | Application/operator | security guide and config tests |

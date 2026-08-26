@@ -19,6 +19,11 @@ type LocalSessionLifecycle interface {
 	Leave(context.Context) error
 }
 
+type NamedLocalSessionLifecycle interface {
+	CreateLocalNamed(context.Context, model.Snapshot, string) error
+	Leave(context.Context) error
+}
+
 type JoinedSessionLifecycle interface {
 	Join(context.Context, Invitation) error
 	Leave(context.Context) error
@@ -38,6 +43,23 @@ func PrepareLocalSession(ctx context.Context, lifecycle LocalSessionLifecycle, p
 		return nil, fmt.Errorf("prepare local collaboration session: lifecycle is unavailable")
 	}
 	if err := lifecycle.CreateLocal(ctx, snapshot); err != nil {
+		return nil, err
+	}
+	execution := provider.CollaborationExecutor()
+	if execution != nil {
+		return execution, nil
+	}
+	cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), incompleteSessionCleanupTimeout)
+	defer cancelCleanup()
+	cleanupErr := lifecycle.Leave(cleanupContext)
+	return nil, errors.Join(fmt.Errorf("prepare local collaboration session: synchronized executor is unavailable"), cleanupErr)
+}
+
+func PrepareNamedLocalSession(ctx context.Context, lifecycle NamedLocalSessionLifecycle, provider CollaborationExecutorProvider, snapshot model.Snapshot, displayName string) (executor.Executor, error) {
+	if lifecycle == nil || provider == nil {
+		return nil, fmt.Errorf("prepare local collaboration session: lifecycle is unavailable")
+	}
+	if err := lifecycle.CreateLocalNamed(ctx, snapshot, displayName); err != nil {
 		return nil, err
 	}
 	execution := provider.CollaborationExecutor()

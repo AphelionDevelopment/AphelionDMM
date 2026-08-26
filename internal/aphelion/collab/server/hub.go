@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +132,31 @@ func (hub *Hub) Leave(sessionID string, actorID model.ActorID) error {
 	}
 	delete(session.members, actorID)
 	session.presence.Remove(actorID)
+	return nil
+}
+
+func (hub *Hub) UpdateDisplayName(sessionID string, principal Principal, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	hub.mutex.Lock()
+	session, exists := hub.sessions[sessionID]
+	if !exists {
+		hub.mutex.Unlock()
+		return ErrSessionNotFound
+	}
+	member, joined := session.members[principal.ActorID()]
+	if !joined || member.ID() != principal.ID() {
+		hub.mutex.Unlock()
+		return ErrNotJoined
+	}
+	renamed, err := NewPrincipal(member.ID(), member.ActorID(), displayName, member.Role())
+	if err != nil {
+		hub.mutex.Unlock()
+		return err
+	}
+	session.members[member.ActorID()] = renamed
+	presence := session.presence
+	hub.mutex.Unlock()
+	presence.Rename(renamed)
 	return nil
 }
 

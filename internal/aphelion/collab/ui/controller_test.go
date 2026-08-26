@@ -36,6 +36,20 @@ func TestControllerCreateLocalRedeemsTokenAndLeaves(t *testing.T) {
 	}
 }
 
+func TestControllerCreateLocalNamedPassesOwnerDisplayName(t *testing.T) {
+	t.Parallel()
+	snapshot := controllerSnapshot(t)
+	service := &fakeEmbeddedService{endpoint: "http://127.0.0.1:1234", token: "launch-secret"}
+	client := &fakeCollaborationClient{}
+	controller := NewController(func(context.Context, model.Snapshot) (EmbeddedService, error) { return service, nil }, client)
+	if err := controller.CreateLocalNamed(context.Background(), snapshot, "Zoe"); err != nil {
+		t.Fatal(err)
+	}
+	if client.createdName != "Zoe" {
+		t.Fatalf("owner display name = %q, want Zoe", client.createdName)
+	}
+}
+
 func TestControllerJoinDoesNotExposeToken(t *testing.T) {
 	t.Parallel()
 
@@ -213,9 +227,16 @@ func (service *fakeEmbeddedService) Shutdown(context.Context) error {
 
 type fakeCollaborationClient struct {
 	createToken string
+	createdName string
 	joined      Invitation
 	leaveCalls  int
 	pending     bool
+}
+
+func (client *fakeCollaborationClient) CreateNamed(_ context.Context, baseURL, launchToken string, _ model.Snapshot, displayName string) (Invitation, error) {
+	client.createToken = launchToken
+	client.createdName = displayName
+	return Invitation{BaseURL: baseURL, Origin: baseURL, SessionID: "session", Token: "owner-secret"}, nil
 }
 
 func (client *fakeCollaborationClient) Create(_ context.Context, baseURL, launchToken string, _ model.Snapshot) (Invitation, error) {

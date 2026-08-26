@@ -25,6 +25,52 @@ paths:
               schema: { $ref: '#/components/schemas/HostedAuthBegin' }
         '429': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /v1/auth/desktop/begin:
+    post:
+      summary: Begin verifier-bound desktop OIDC authentication
+      operationId: beginHostedDesktopAuthentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HostedDesktopAuthBeginRequest' }
+      responses:
+        '200':
+          description: OIDC authorization URL and opaque desktop handoff identifier
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedDesktopAuthBegin' }
+        '400': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/auth/desktop/exchange:
+    post:
+      summary: Exchange a completed desktop handoff for an in-memory hosted credential
+      operationId: exchangeHostedDesktopAuthentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HostedDesktopAuthExchangeRequest' }
+      responses:
+        '200':
+          description: Short-lived hosted authentication session
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedAuthentication' }
+        '202':
+          description: Browser authentication has not completed yet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HostedDesktopAuthPending' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
   /v1/auth/complete:
     get:
       summary: Complete hosted OIDC authentication
@@ -40,7 +86,10 @@ paths:
             Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/HostedAuthentication' }
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/HostedAuthentication' }
+                  - { $ref: '#/components/schemas/HostedDesktopAuthComplete' }
         '401': { $ref: '#/components/responses/Error' }
   /v1/auth/logout:
     post:
@@ -69,6 +118,7 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
   /v1/sessions:
     post:
       summary: Create an embedded collaboration session
@@ -87,6 +137,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateSessionResponse' }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
   /v1/sessions/{session_id}:
     parameters: [{ $ref: '#/components/parameters/SessionID' }]
     get:
@@ -268,6 +319,7 @@ components:
       required: [snapshot]
       properties:
         snapshot: { $ref: '#/components/schemas/Snapshot' }
+        display_name: { type: string, minLength: 1, maxLength: 128, default: Owner }
     CreateSessionResponse:
       type: object
       additionalProperties: false
@@ -294,6 +346,38 @@ components:
       required: [authorization_url]
       properties:
         authorization_url: { type: string, format: uri, maxLength: 8192 }
+    HostedDesktopAuthBeginRequest:
+      type: object
+      additionalProperties: false
+      required: [verifier_challenge]
+      properties:
+        verifier_challenge: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$' }
+    HostedDesktopAuthBegin:
+      type: object
+      additionalProperties: false
+      required: [authorization_url, handoff_id]
+      properties:
+        authorization_url: { type: string, format: uri, maxLength: 8192 }
+        handoff_id: { type: string, minLength: 1, maxLength: 128 }
+    HostedDesktopAuthExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [handoff_id, verifier]
+      properties:
+        handoff_id: { type: string, minLength: 1, maxLength: 128 }
+        verifier: { type: string, minLength: 43, maxLength: 256 }
+    HostedDesktopAuthPending:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: pending }
+    HostedDesktopAuthComplete:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: complete }
     HostedAuthentication:
       type: object
       additionalProperties: false

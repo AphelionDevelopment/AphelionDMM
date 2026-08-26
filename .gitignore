@@ -30,3 +30,9 @@ dst/
 
 # Local cross-repository acceptance evidence
 .artifacts/
+
+# Local hosted-deployment configuration and secrets
+/deploy/production/.env
+/deploy/production/config.yaml
+/deploy/production/secrets/
+/deploy/production/backups/

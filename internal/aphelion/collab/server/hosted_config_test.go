@@ -26,6 +26,7 @@ limits:
   max_operation_changes: 512
   max_websocket_message_bytes: 262144
   max_http_body_bytes: 524288
+  max_snapshot_body_bytes: 268435456
 telemetry:
   endpoint: "https://telemetry.example.test"
 `
@@ -75,6 +76,21 @@ func TestSecretSourceRejectsRelativeFile(t *testing.T) {
 	}
 }
 
+func TestSecretFilePermissionsAllowContainerManagedSecretOnly(t *testing.T) {
+	if !secretFilePermissionsAllowed("/run/secrets/database_dsn", 0o777, "linux", false) {
+		t.Fatal("read-only Docker secret permissions were rejected")
+	}
+	if secretFilePermissionsAllowed("/run/secrets/database_dsn", 0o777, "linux", true) {
+		t.Fatal("writable Docker secret was accepted")
+	}
+	if secretFilePermissionsAllowed("/tmp/database_dsn", 0o444, "linux", false) {
+		t.Fatal("broad permissions outside /run/secrets were accepted")
+	}
+	if !secretFilePermissionsAllowed("/tmp/database_dsn", 0o600, "linux", true) {
+		t.Fatal("owner-only secret permissions were rejected")
+	}
+}
+
 func TestLoadHostedConfigRejectsUnknownField(t *testing.T) {
 	_, err := LoadHostedConfig(strings.NewReader(validHostedYAML + "unknown_setting: true\n"))
 	if err == nil {
@@ -88,6 +104,7 @@ func TestLoadHostedConfigRejectsInsecureOrAmbiguousNetworkConfiguration(t *testi
 		strings.Replace(validHostedYAML, "10.0.0.0/8", "not-a-network", 1),
 		strings.Replace(validHostedYAML, "https://identity.example.test", "http://identity.example.test", 1),
 		strings.Replace(validHostedYAML, "https://telemetry.example.test", "http://telemetry.example.test", 1),
+		strings.Replace(validHostedYAML, "max_snapshot_body_bytes: 268435456", "max_snapshot_body_bytes: 268435457", 1),
 	}
 	for index, data := range tests {
 		if _, err := LoadHostedConfig(strings.NewReader(data)); err == nil {

@@ -4,13 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -53,6 +56,7 @@ type HostedLimits struct {
 	MaxOperationChanges      int   `yaml:"max_operation_changes"`
 	MaxWebSocketMessageBytes int64 `yaml:"max_websocket_message_bytes"`
 	MaxHTTPBodyBytes         int64 `yaml:"max_http_body_bytes"`
+	MaxSnapshotBodyBytes     int64 `yaml:"max_snapshot_body_bytes"`
 }
 
 type HostedTelemetry struct {
@@ -126,6 +130,9 @@ func (config *HostedConfig) validate() error {
 	if config.Limits.MaxHTTPBodyBytes <= 0 || config.Limits.MaxHTTPBodyBytes > MaxHTTPBodyBytes {
 		return fmt.Errorf("hosted HTTP body limit is invalid")
 	}
+	if config.Limits.MaxSnapshotBodyBytes <= 0 || config.Limits.MaxSnapshotBodyBytes > MaxSnapshotBodyBytes {
+		return fmt.Errorf("hosted snapshot body limit is invalid")
+	}
 	return nil
 }
 
@@ -160,7 +167,14 @@ func (source SecretSource) Resolve(lookup func(string) (string, bool)) (string, 
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("secret file must be a regular non-symlink file")
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+	fileWritable := false
+	if runtime.GOOS != "windows" && containerSecretPath(source.File) {
+		fileWritable, err = probeSecretFileWritable(source.File)
+		if err != nil {
+			return "", fmt.Errorf("inspect secret file writability: %w", err)
+		}
+	}
+	if !secretFilePermissionsAllowed(source.File, info.Mode(), runtime.GOOS, fileWritable) {
 		return "", fmt.Errorf("secret file permissions must not grant group or other access")
 	}
 	file, err := os.Open(source.File)
@@ -180,6 +194,31 @@ func (source SecretSource) Resolve(lookup func(string) (string, bool)) (string, 
 		return "", fmt.Errorf("secret file is empty or invalid")
 	}
 	return value, nil
+}
+
+func secretFilePermissionsAllowed(filePath string, mode os.FileMode, goos string, fileWritable bool) bool {
+	if goos == "windows" {
+		return true
+	}
+	if containerSecretPath(filePath) {
+		return !fileWritable
+	}
+	return mode.Perm()&0o077 == 0
+}
+
+func containerSecretPath(filePath string) bool {
+	return strings.HasPrefix(path.Clean(filepath.ToSlash(filePath)), "/run/secrets/")
+}
+
+func probeSecretFileWritable(filePath string) (bool, error) {
+	file, err := os.OpenFile(filePath, os.O_WRONLY, 0)
+	if err == nil {
+		return true, file.Close()
+	}
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (source SecretSource) String() string {

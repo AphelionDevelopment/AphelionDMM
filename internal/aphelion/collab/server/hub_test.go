@@ -109,6 +109,47 @@ func TestPresencePressureDoesNotBlockDurableDelivery(t *testing.T) {
 	}
 }
 
+func TestHubUpdateDisplayNamePublishesAuthenticatedParticipant(t *testing.T) {
+	t.Parallel()
+	snapshot := testSnapshot(t, 1)
+	ownerLoop, err := StartDocument(context.Background(), snapshot, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ownerLoop.Close(context.Background()) })
+	owner := testPrincipal(t, "Owner", RoleOwner)
+	hub := NewHub(time.Minute)
+	if err := hub.Create("session-1", ownerLoop, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.UpdatePresence("session-1", owner, PresenceUpdate{Sequence: 1, Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	_, updates, cancel, err := hub.SubscribePresence("session-1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if err := hub.UpdateDisplayName("session-1", owner, "Zoe"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case renamed := <-updates:
+		if renamed.ActorID != owner.ActorID() || renamed.DisplayName != "Zoe" || renamed.Sequence != 1 {
+			t.Fatalf("renamed presence = %#v", renamed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("display-name update was not published")
+	}
+	forged, err := NewPrincipal("forged", owner.ActorID(), "Attacker", RoleOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.UpdateDisplayName("session-1", forged, "Attacker"); !errors.Is(err, ErrNotJoined) {
+		t.Fatalf("forged rename error = %v, want %v", err, ErrNotJoined)
+	}
+}
+
 func testPrincipal(t *testing.T, displayName string, role Role) Principal {
 	t.Helper()
 	actorID, err := model.NewActorID()

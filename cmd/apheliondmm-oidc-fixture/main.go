@@ -34,6 +34,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	redirectURL := flags.String("redirect-url", "", "exact hosted-service OIDC callback URL")
 	clientID := flags.String("client-id", "apheliondmm-local-fixture", "test OIDC client ID")
 	caPath := flags.String("ca-file", "", "new protected file that receives the disposable root CA")
+	interactiveIdentities := flags.Bool("interactive-identities", false, "prompt for a distinct disposable pilot identity")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -49,7 +50,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	}
 	fixture, err := testoidc.New(testoidc.Config{
 		Issuer: *issuer, ClientID: *clientID, ClientSecret: clientSecret, RedirectURL: *redirectURL,
-		Subject: "aphelion-local-fixture-subject", DisplayName: "Aphelion Local Fixture",
+		Subject: "aphelion-local-fixture-subject", DisplayName: "Aphelion Local Fixture", InteractiveIdentities: *interactiveIdentities,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "initialize OIDC fixture: %v\n", err)

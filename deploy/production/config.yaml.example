@@ -1,0 +1,22 @@
+bind_address: "0.0.0.0:8080"
+public_origin: "https://mapping.a13.info"
+trusted_proxy_cidrs:
+  - "172.30.90.0/24"
+database:
+  dsn:
+    file: "/run/secrets/database_dsn"
+oidc:
+  issuer: "https://accounts.google.com"
+  client_id: "replace-with-oidc-client-id"
+  redirect_url: "https://mapping.a13.info/v1/auth/complete"
+  client_secret:
+    file: "/run/secrets/oidc_client_secret"
+limits:
+  max_connections: 64
+  max_operation_changes: 512
+  max_websocket_message_bytes: 262144
+  max_http_body_bytes: 524288
+  max_snapshot_body_bytes: 268435456
+telemetry:
+  endpoint: ""
+

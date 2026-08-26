@@ -13,6 +13,8 @@ import (
 	loadscenario "sdmm/internal/aphelion/collab/load"
 )
 
+const editorTokensFileEnvironment = "APHELIONDMM_LOAD_EDITOR_TOKENS_FILE"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -33,6 +35,11 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 		_, _ = fmt.Fprintln(errorOutput, "APHELIONDMM_LOAD_OWNER_TOKEN is required")
 		return 2
 	}
+	editorTokens, err := editorTokensFromEnvironment()
+	if err != nil {
+		_, _ = fmt.Fprintf(errorOutput, "load hosted editor credentials: %v\n", err)
+		return 2
+	}
 	scenario, err := loadScenario(*scenarioPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(errorOutput, "load scenario: %v\n", err)
@@ -42,7 +49,7 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
-	result, err := loadscenario.Run(ctx, loadscenario.RunConfig{Endpoint: *endpoint, Origin: *origin, SessionID: *sessionID, OwnerToken: ownerToken}, scenario)
+	result, err := loadscenario.Run(ctx, loadscenario.RunConfig{Endpoint: *endpoint, Origin: *origin, SessionID: *sessionID, OwnerToken: ownerToken, EditorTokens: editorTokens}, scenario)
 	if err != nil {
 		_, _ = fmt.Fprintf(errorOutput, "run load scenario: %v\n", err)
 		return 1
@@ -55,6 +62,14 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func editorTokensFromEnvironment() ([]string, error) {
+	path := os.Getenv(editorTokensFileEnvironment)
+	if path == "" {
+		return nil, nil
+	}
+	return loadscenario.LoadEditorTokens(path)
 }
 
 func loadScenario(path string) (loadscenario.Scenario, error) {

@@ -1,0 +1,21 @@
+bind_address: "0.0.0.0:8080"
+public_origin: "https://localhost:8443"
+trusted_proxy_cidrs:
+  - "172.16.0.0/12"
+database:
+  dsn:
+    environment: "APHELIONDMM_DATABASE_DSN"
+oidc:
+  issuer: "https://localhost:9443"
+  client_id: "apheliondmm-desktop-pilot"
+  redirect_url: "https://localhost:8443/v1/auth/complete"
+  client_secret:
+    environment: "APHELIONDMM_OIDC_CLIENT_SECRET"
+limits:
+  max_connections: 64
+  max_operation_changes: 512
+  max_websocket_message_bytes: 262144
+  max_http_body_bytes: 524288
+  max_snapshot_body_bytes: 268435456
+telemetry:
+  endpoint: ""

@@ -25,6 +25,7 @@ import (
 
 const (
 	MaxHTTPBodyBytes     = 2 << 20
+	MaxSnapshotBodyBytes = 256 << 20
 	WebSocketSubprotocol = "apheliondmm.collaboration.v1"
 )
 
@@ -87,6 +88,13 @@ type sessionRecord struct {
 	owner *DocumentOwner
 }
 
+type desktopAuthHandoff struct {
+	challenge [sha256.Size]byte
+	stateHash [sha256.Size]byte
+	expiresAt time.Time
+	session   *auth.Session
+}
+
 type Service struct {
 	config            ServiceConfig
 	context           context.Context
@@ -99,6 +107,8 @@ type Service struct {
 	tokens            map[string]tokenRecord
 	sessions          map[string]sessionRecord
 	recoveryErrors    map[model.DocumentID]error
+	desktopHandoffs   map[[sha256.Size]byte]desktopAuthHandoff
+	desktopAuthStates map[[sha256.Size]byte][sha256.Size]byte
 	activeConnections int
 	joinLimiter       *rateLimiter
 	durableLimiter    *rateLimiter
@@ -145,22 +155,24 @@ func NewService(config ServiceConfig) *Service {
 		config.Document.Telemetry = config.Telemetry
 	}
 	service := &Service{
-		config:          config,
-		context:         serviceContext,
-		cancel:          cancel,
-		hub:             NewHubWithTelemetry(config.PresenceTimeout, config.Telemetry),
-		store:           store,
-		documentConfig:  config.Document,
-		limits:          limits,
-		joinLimiter:     newRateLimiter(limits.JoinRate, limits.RateEntries),
-		durableLimiter:  newRateLimiter(limits.DurableRate, limits.RateEntries),
-		presenceLimiter: newRateLimiter(limits.PresenceRate, limits.RateEntries),
-		telemetry:       config.Telemetry,
-		compatibility:   config.Compatibility,
-		tokens:          make(map[string]tokenRecord),
-		sessions:        make(map[string]sessionRecord),
-		recoveryErrors:  make(map[model.DocumentID]error),
-		server:          http.NewServeMux(),
+		config:            config,
+		context:           serviceContext,
+		cancel:            cancel,
+		hub:               NewHubWithTelemetry(config.PresenceTimeout, config.Telemetry),
+		store:             store,
+		documentConfig:    config.Document,
+		limits:            limits,
+		joinLimiter:       newRateLimiter(limits.JoinRate, limits.RateEntries),
+		durableLimiter:    newRateLimiter(limits.DurableRate, limits.RateEntries),
+		presenceLimiter:   newRateLimiter(limits.PresenceRate, limits.RateEntries),
+		telemetry:         config.Telemetry,
+		compatibility:     config.Compatibility,
+		tokens:            make(map[string]tokenRecord),
+		sessions:          make(map[string]sessionRecord),
+		recoveryErrors:    make(map[model.DocumentID]error),
+		desktopHandoffs:   make(map[[sha256.Size]byte]desktopAuthHandoff),
+		desktopAuthStates: make(map[[sha256.Size]byte][sha256.Size]byte),
+		server:            http.NewServeMux(),
 	}
 	service.routes()
 	go service.expirePresence(config.PresenceTimeout / 2)
@@ -253,6 +265,8 @@ func (service *Service) routes() {
 	service.server.HandleFunc("GET /v1/health/ready", service.handleReady)
 	service.server.HandleFunc("GET /v1/version", service.handleVersion)
 	service.server.HandleFunc("POST /v1/auth/begin", service.handleHostedAuthBegin)
+	service.server.HandleFunc("POST /v1/auth/desktop/begin", service.handleHostedDesktopAuthBegin)
+	service.server.HandleFunc("POST /v1/auth/desktop/exchange", service.handleHostedDesktopAuthExchange)
 	service.server.HandleFunc("GET /v1/auth/complete", service.handleHostedAuthComplete)
 	service.server.HandleFunc("POST /v1/auth/logout", service.handleHostedAuthLogout)
 	service.server.HandleFunc("POST /v1/sessions", service.handleCreateSession)
@@ -312,9 +326,10 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "invalid or redeemed launch token")
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxSnapshotBodyBytes)
 	var body struct {
-		Snapshot model.Snapshot `json:"snapshot"`
+		Snapshot    model.Snapshot `json:"snapshot"`
+		DisplayName string         `json:"display_name,omitempty"`
 	}
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
@@ -326,6 +341,14 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 		}
 		writeError(writer, status, "invalid_request", "invalid session request")
 		return
+	}
+	displayName := "Owner"
+	if body.DisplayName != "" {
+		displayName = strings.TrimSpace(body.DisplayName)
+		if displayName == "" || len(displayName) > protocol.MaxDisplayNameBytes {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "owner display name is invalid")
+			return
+		}
 	}
 	mapHash, err := body.Snapshot.Hash()
 	if err != nil {
@@ -368,7 +391,7 @@ func (service *Service) handleCreateSession(writer http.ResponseWriter, request 
 		writeError(writer, http.StatusInternalServerError, "internal", "identity generation failed")
 		return
 	}
-	principal, err := NewPrincipal("embedded-owner", actorID, "Owner", RoleOwner)
+	principal, err := NewPrincipal("embedded-owner", actorID, displayName, RoleOwner)
 	if err != nil {
 		_ = owner.Close(request.Context())
 		writeError(writer, http.StatusInternalServerError, "internal", "identity initialization failed")

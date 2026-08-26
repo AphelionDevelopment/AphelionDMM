@@ -11,6 +11,7 @@ Date: 2026-08-25
 - The runner uses only the public join-token HTTP endpoint, collaboration WebSocket subprotocol, and snapshot HTTP endpoint.
 - Each durable operation must be observed by every connected client before the next operation begins. The final authoritative snapshot must match the expected revision and hash.
 - The command reads the owner credential only from `APHELIONDMM_LOAD_OWNER_TOKEN` and emits JSON p50/p95/p99 latency, counts, convergence state, and gate outcome.
+- Hosted runs additionally read one OIDC session credential per simulated editor from the bounded, permission-checked JSON file named by `APHELIONDMM_LOAD_EDITOR_TOKENS_FILE`. The runner creates and redeems ordinary hosted invitations and never calls the hosted-forbidden embedded join-token endpoint. Tokens remain memory-only and are excluded from results and bounded errors.
 
 ## Verification
 

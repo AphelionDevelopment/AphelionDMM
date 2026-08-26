@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +31,7 @@ type Invitation struct {
 	SessionID      string    `json:"session_id"`
 	Token          string    `json:"-"`
 	TokenExpiresAt time.Time `json:"-"`
+	Hosted         bool      `json:"hosted,omitempty"`
 }
 
 func (invitation Invitation) String() string {
@@ -38,7 +42,30 @@ func (invitation Invitation) validate() error {
 	if invitation.BaseURL == "" || invitation.Origin == "" || invitation.SessionID == "" || invitation.Token == "" {
 		return fmt.Errorf("collaboration invitation is incomplete")
 	}
+	if invitation.Hosted {
+		if invitation.Origin != invitation.BaseURL {
+			return fmt.Errorf("hosted collaboration invitation origin is invalid")
+		}
+		if err := validateHostedEndpoint(invitation.BaseURL); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateHostedEndpoint(value string) error {
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
+		return fmt.Errorf("hosted collaboration service address is invalid")
+	}
+	if endpoint.Scheme == "https" {
+		return nil
+	}
+	ip := net.ParseIP(endpoint.Hostname())
+	if endpoint.Scheme == "http" && (strings.EqualFold(endpoint.Hostname(), "localhost") || (ip != nil && ip.IsLoopback())) {
+		return nil
+	}
+	return fmt.Errorf("hosted collaboration service requires HTTPS")
 }
 
 type EmbeddedService interface {
@@ -54,6 +81,10 @@ type CollaborationClient interface {
 	Join(context.Context, Invitation) error
 	Leave(context.Context) error
 	HasUnacknowledgedOperations() bool
+}
+
+type NamedCollaborationClient interface {
+	CreateNamed(context.Context, string, string, model.Snapshot, string) (Invitation, error)
 }
 
 type Controller struct {
@@ -72,6 +103,14 @@ func NewController(start EmbeddedStarter, client CollaborationClient) *Controlle
 }
 
 func (controller *Controller) CreateLocal(ctx context.Context, snapshot model.Snapshot) error {
+	return controller.createLocal(ctx, snapshot, "Owner")
+}
+
+func (controller *Controller) CreateLocalNamed(ctx context.Context, snapshot model.Snapshot, displayName string) error {
+	return controller.createLocal(ctx, snapshot, displayName)
+}
+
+func (controller *Controller) createLocal(ctx context.Context, snapshot model.Snapshot, displayName string) error {
 	reservation, err := controller.reserve()
 	if err != nil {
 		return err
@@ -91,7 +130,12 @@ func (controller *Controller) CreateLocal(ctx context.Context, snapshot model.Sn
 		controller.releaseReservation(reservation)
 		return fmt.Errorf("embedded collaboration launch token is unavailable")
 	}
-	invitation, err := controller.client.Create(ctx, service.Endpoint(), launchToken, snapshot)
+	var invitation Invitation
+	if named, ok := controller.client.(NamedCollaborationClient); ok {
+		invitation, err = named.CreateNamed(ctx, service.Endpoint(), launchToken, snapshot, displayName)
+	} else {
+		invitation, err = controller.client.Create(ctx, service.Endpoint(), launchToken, snapshot)
+	}
 	if err != nil {
 		_ = service.Shutdown(context.Background())
 		controller.releaseReservation(reservation)

@@ -10,6 +10,8 @@ import (
 
 const maxEncodedInvitationBytes = 4096
 
+const hostedInvitationFormatVersion = 1
+
 type InvitationRole string
 
 const (
@@ -18,11 +20,13 @@ const (
 )
 
 type encodedInvitation struct {
-	BaseURL   string    `json:"base_url"`
-	Origin    string    `json:"origin"`
-	SessionID string    `json:"session_id"`
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	FormatVersion int       `json:"format_version,omitempty"`
+	BaseURL       string    `json:"base_url"`
+	Origin        string    `json:"origin"`
+	SessionID     string    `json:"session_id"`
+	Token         string    `json:"token"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+	Hosted        bool      `json:"hosted,omitempty"`
 }
 
 // EncodeInvitation explicitly serializes the short-lived credential for user-directed transfer.
@@ -31,7 +35,13 @@ func EncodeInvitation(invitation Invitation) (string, error) {
 		return "", err
 	}
 	data, err := json.Marshal(encodedInvitation{
-		BaseURL: invitation.BaseURL, Origin: invitation.Origin, SessionID: invitation.SessionID, Token: invitation.Token, ExpiresAt: invitation.TokenExpiresAt,
+		FormatVersion: func() int {
+			if invitation.Hosted {
+				return hostedInvitationFormatVersion
+			}
+			return 0
+		}(),
+		BaseURL: invitation.BaseURL, Origin: invitation.Origin, SessionID: invitation.SessionID, Token: invitation.Token, ExpiresAt: invitation.TokenExpiresAt, Hosted: invitation.Hosted,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode collaboration invitation: %w", err)
@@ -56,11 +66,17 @@ func ParseInvitation(value string) (Invitation, error) {
 	if err := requireJSONEnd(decoder); err != nil {
 		return Invitation{}, err
 	}
+	if (encoded.Hosted && encoded.FormatVersion != hostedInvitationFormatVersion) || (!encoded.Hosted && encoded.FormatVersion != 0) {
+		return Invitation{}, fmt.Errorf("collaboration invitation format version is unsupported")
+	}
 	invitation := Invitation{
-		BaseURL: encoded.BaseURL, Origin: encoded.Origin, SessionID: encoded.SessionID, Token: encoded.Token, TokenExpiresAt: encoded.ExpiresAt,
+		BaseURL: encoded.BaseURL, Origin: encoded.Origin, SessionID: encoded.SessionID, Token: encoded.Token, TokenExpiresAt: encoded.ExpiresAt, Hosted: encoded.Hosted,
 	}
 	if err := invitation.validate(); err != nil {
 		return Invitation{}, err
+	}
+	if invitation.Hosted && (invitation.TokenExpiresAt.IsZero() || !time.Now().Before(invitation.TokenExpiresAt)) {
+		return Invitation{}, fmt.Errorf("hosted collaboration invitation is expired")
 	}
 	return invitation, nil
 }

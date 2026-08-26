@@ -72,6 +72,7 @@ limits:
   max_operation_changes: 512
   max_websocket_message_bytes: 262144
   max_http_body_bytes: 524288
+  max_snapshot_body_bytes: 268435456
 telemetry:
   endpoint: "https://host.docker.internal:%d"
 `, oidcPort, oidcPort)
@@ -81,7 +82,7 @@ telemetry:
 
 	docker(t, "run", "--detach", "--name", postgresName, "--network", networkName,
 		"--env", "POSTGRES_USER=aphelion_fixture", "--env", "POSTGRES_PASSWORD=fixture-db-only", "--env", "POSTGRES_DB=aphelion_fixture",
-		"--health-cmd", "pg_isready -U aphelion_fixture -d aphelion_fixture", "--health-interval", "1s", "--health-timeout", "2s", "--health-retries", "30", postgresImage)
+		"--health-cmd", "pg_isready -h 127.0.0.1 -U aphelion_fixture -d aphelion_fixture", "--health-interval", "1s", "--health-timeout", "2s", "--health-retries", "30", postgresImage)
 	waitDockerHealth(t, postgresName, "healthy", time.Minute)
 
 	databaseDSN := fmt.Sprintf("postgres://aphelion_fixture:fixture-db-only@%s:5432/aphelion_fixture?sslmode=disable", postgresName)

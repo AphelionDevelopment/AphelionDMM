@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,49 @@ import (
 	"sdmm/internal/aphelion/collab/protocol"
 	"sdmm/internal/aphelion/collab/server"
 )
+
+func TestSessionClientReportsOversizedSnapshotRequestSize(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	t.Cleanup(testServer.Close)
+	client := NewSessionClient(SessionClientConfig{})
+	_, err := client.Create(context.Background(), testServer.URL, "launch-token", controllerSnapshot(t))
+	if err == nil || !strings.Contains(err.Error(), "snapshot request") || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("Create() error = %v, want snapshot request size diagnostic", err)
+	}
+}
+
+func TestSessionClientCreateNamedSendsOwnerDisplayName(t *testing.T) {
+	t.Parallel()
+	snapshot := controllerSnapshot(t)
+	var displayName string
+	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		displayName = body.DisplayName
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"session_id": "session-1", "document_id": snapshot.DocumentID, "revision": snapshot.Revision,
+			"map_hash": mustSnapshotHash(t, snapshot), "owner_token": "owner-token", "owner_token_expires_at": time.Now().Add(time.Hour),
+		})
+	}))
+	t.Cleanup(testServer.Close)
+	client := NewSessionClient(SessionClientConfig{})
+	if _, err := client.CreateNamed(context.Background(), testServer.URL, "launch-token", snapshot, "  Zoe  "); err != nil {
+		t.Fatal(err)
+	}
+	if displayName != "Zoe" {
+		t.Fatalf("display name = %q, want Zoe", displayName)
+	}
+}
 
 func TestSessionClientPublishPresenceUsesNegotiatedInterval(t *testing.T) {
 	t.Parallel()
@@ -65,6 +110,35 @@ func TestSessionClientPublishPresenceUsesNegotiatedInterval(t *testing.T) {
 		if payload.Selection == nil || payload.Selection.Min != selection.Min || payload.Selection.Max != selection.Max {
 			t.Fatalf("presence %d selection = %#v, want %#v", index, payload.Selection, selection)
 		}
+	}
+}
+
+func TestSessionClientUpdatesAuthenticatedDisplayName(t *testing.T) {
+	t.Parallel()
+	transport := &capturingSessionTransport{}
+	client := NewSessionClient(SessionClientConfig{})
+	client.transport = transport
+	client.sessionID = "session-1"
+	for _, event := range []collabclient.Event{collabclient.EventConnect, collabclient.EventConnected, collabclient.EventSynchronized} {
+		if err := client.machine.Apply(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.UpdateDisplayName(context.Background(), "  Zoe  "); err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.sent) != 1 {
+		t.Fatalf("profile messages = %d, want 1", len(transport.sent))
+	}
+	decoded, err := protocol.DecodeClient(mustMarshalEnvelope(t, transport.sent[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Envelope.Type != protocol.ClientProfileUpdate || decoded.Payload.(*protocol.ProfileUpdatePayload).DisplayName != "Zoe" {
+		t.Fatalf("profile update = %#v", decoded)
+	}
+	if err := client.UpdateDisplayName(context.Background(), "   "); err == nil {
+		t.Fatal("blank display name was accepted")
 	}
 }
 
@@ -469,6 +543,111 @@ func TestSessionClientReconnectAttemptStopsWhenTransportEndsBeforeReplay(t *test
 	}
 }
 
+func TestSessionClientClosesTransportOnIntegrityFault(t *testing.T) {
+	snapshot := controllerSnapshot(t)
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapHash := mustSnapshotHash(t, snapshot)
+	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/sessions/session-1/snapshot" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(snapshot)
+	}))
+	t.Cleanup(testServer.Close)
+	joined := protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "joined", SessionID: "session-1", Type: protocol.ServerJoined, Payload: mustRawJSON(t, protocol.JoinedPayload{
+		DocumentID: snapshot.DocumentID, ActorID: actorID, Role: "owner", Revision: snapshot.Revision, MapHash: mapHash,
+		PresenceIntervalMS: 100, ResumptionToken: "resumption-token", ResumptionTokenExpiresAt: time.Now().Add(time.Hour),
+	})}
+	replayComplete := protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "replay-complete", SessionID: "session-1", Type: protocol.ServerReplayComplete, Payload: mustRawJSON(t, protocol.ReplayCompletePayload{Revision: snapshot.Revision, MapHash: mapHash})}
+	first := newIntegritySessionTransport(joined, replayComplete)
+	failedReconnect := &preReplayFailureTransport{err: errors.New("reconnect remains pending"), joined: joined.Payload}
+	transports := []sessionTransport{first, failedReconnect}
+	client := NewSessionClient(SessionClientConfig{Reconnect: collabclient.ReconnectPolicy{MaxAttempts: 1, Wait: func(context.Context, time.Duration) error { return nil }}})
+	client.newTransport = func() sessionTransport {
+		transport := transports[0]
+		transports = transports[1:]
+		return transport
+	}
+	invitation := Invitation{BaseURL: testServer.URL, Origin: testServer.URL, SessionID: "session-1", Token: "owner-token", TokenExpiresAt: time.Now().Add(time.Hour)}
+	if err := client.Join(context.Background(), invitation); err != nil {
+		t.Fatal(err)
+	}
+	operation := sessionConflictOperation(t, snapshot, actorID)
+	accepted := model.AcceptedOperation{Operation: operation, Revision: snapshot.Revision + 2, AcceptedAt: time.Unix(1, 0)}
+	first.deliver(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "revision-gap", SessionID: "session-1", Type: protocol.ServerOperationAccepted, Payload: mustRawJSON(t, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: strings.Repeat("a", 64)})})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if first.wasClosed() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("integrity fault did not close the active transport")
+}
+
+type integritySessionTransport struct {
+	mutex    sync.Mutex
+	messages []protocol.ServerEnvelope
+	receive  func(protocol.ServerEnvelope)
+	done     chan struct{}
+	closed   bool
+	once     sync.Once
+}
+
+func newIntegritySessionTransport(messages ...protocol.ServerEnvelope) *integritySessionTransport {
+	return &integritySessionTransport{messages: messages, done: make(chan struct{})}
+}
+
+func (transport *integritySessionTransport) Connect(_ context.Context, _ protocol.JoinRequest, receive func(protocol.ServerEnvelope)) error {
+	transport.mutex.Lock()
+	transport.receive = receive
+	transport.mutex.Unlock()
+	for _, message := range transport.messages {
+		receive(message)
+	}
+	return nil
+}
+
+func (*integritySessionTransport) Send(context.Context, protocol.ClientEnvelope) error { return nil }
+
+func (transport *integritySessionTransport) Close(websocket.StatusCode, string) error {
+	transport.once.Do(func() {
+		transport.mutex.Lock()
+		transport.closed = true
+		transport.mutex.Unlock()
+		close(transport.done)
+	})
+	return nil
+}
+
+func (transport *integritySessionTransport) Wait(ctx context.Context) error {
+	select {
+	case <-transport.done:
+		return errors.New("integrity transport closed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (transport *integritySessionTransport) deliver(message protocol.ServerEnvelope) {
+	transport.mutex.Lock()
+	receive := transport.receive
+	transport.mutex.Unlock()
+	receive(message)
+}
+
+func (transport *integritySessionTransport) wasClosed() bool {
+	transport.mutex.Lock()
+	defer transport.mutex.Unlock()
+	return transport.closed
+}
+
 func TestSessionClientReconnectFetchesSnapshotWhenReplayWasCompacted(t *testing.T) {
 	t.Parallel()
 
@@ -687,6 +866,33 @@ func TestSessionClientJoinContextDoesNotOwnEstablishedConnection(t *testing.T) {
 		t.Fatal("leave retained a collaboration credential")
 	}
 }
+
+func TestSessionClientLeaveIgnoresAlreadyClosedTransport(t *testing.T) {
+	t.Parallel()
+	client := NewSessionClient(SessionClientConfig{})
+	client.transport = &closeErrorSessionTransport{err: net.ErrClosed}
+	if err := client.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() error = %v, want nil for already-closed transport", err)
+	}
+	unexpected := errors.New("unexpected close failure")
+	client.transport = &closeErrorSessionTransport{err: unexpected}
+	if err := client.Leave(context.Background()); !errors.Is(err, unexpected) {
+		t.Fatalf("Leave() error = %v, want %v", err, unexpected)
+	}
+}
+
+type closeErrorSessionTransport struct {
+	err error
+}
+
+func (*closeErrorSessionTransport) Connect(context.Context, protocol.JoinRequest, func(protocol.ServerEnvelope)) error {
+	return nil
+}
+func (*closeErrorSessionTransport) Send(context.Context, protocol.ClientEnvelope) error { return nil }
+func (transport *closeErrorSessionTransport) Close(websocket.StatusCode, string) error {
+	return transport.err
+}
+func (*closeErrorSessionTransport) Wait(context.Context) error { return nil }
 
 func TestSessionClientDiscardConflictResolvesConflictState(t *testing.T) {
 	t.Parallel()

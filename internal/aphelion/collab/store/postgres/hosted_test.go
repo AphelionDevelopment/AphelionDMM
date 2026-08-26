@@ -45,6 +45,13 @@ func TestHostedRegistryPersistsSessionMembershipAndOneUseInvitation(t *testing.T
 	if err != nil || !found || loadedOwner.ActorID != owner.ActorID || loadedOwner.Role != collabstore.HostedRoleOwner {
 		t.Fatalf("resolved owner = %#v/%t/%v", loadedOwner, found, err)
 	}
+	if err := value.UpdateHostedMemberDisplayName(context.Background(), owner.SessionID, owner.ActorID, "Renamed Owner"); err != nil {
+		t.Fatal(err)
+	}
+	loadedOwner, found, err = value.ResolveHostedMember(context.Background(), owner.SessionID, owner.Issuer, owner.Subject)
+	if err != nil || !found || loadedOwner.DisplayName != "Renamed Owner" {
+		t.Fatalf("renamed owner = %#v/%t/%v", loadedOwner, found, err)
+	}
 
 	tokenHash := sha256.Sum256([]byte("one-use-invitation"))
 	invitation := collabstore.HostedInvitation{TokenHash: tokenHash, SessionID: owner.SessionID, Role: collabstore.HostedRoleEditor, CreatedByActorID: owner.ActorID, ExpiresAt: createdAt.Add(time.Minute)}

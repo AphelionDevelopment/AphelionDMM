@@ -56,7 +56,7 @@ The following gates were rerun on the final pre-human-test working tree:
 | Redocly 2.47.0 OpenAPI lint | Valid with four warning-only recommendations for 4xx responses on logout/health/version endpoints |
 | `govulncheck ./...` | Zero called or imported-package vulnerabilities; six findings exist only in required modules on unreachable code paths |
 | Produced `apheliondmm-smoke.exe` | Parser save/reparse, two authenticated clients, revisions 1 and 2, identical final hash, leave, and shutdown passed |
-| Docker-tagged `TestHostedImageLifecycle` | Passed in 17.14 seconds against image `sha256:2584c4b4c0d50d251ed4a492d950e0e974d028f627e3a0962c5367bd1da986ef` |
+| Docker-tagged `TestHostedImageLifecycle` | Latest rebuild passed in 8.25 seconds against image `sha256:13ba75f18d3559a2db5624fa1a1aa92c137e45027f7defb995e70909d3609bd1` |
 | `git diff --check` | Passed; Git reported only expected Windows LF-to-CRLF checkout notices |
 
 The desktop build retains the inherited ImGui C++ `memset` compiler warning documented by prior verification. It is not a new multiplayer diagnostic.

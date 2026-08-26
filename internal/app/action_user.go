@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
 
+	"sdmm/internal/aphelion/collab/executor"
 	"sdmm/internal/aphelion/collab/model"
 	collabui "sdmm/internal/aphelion/collab/ui"
 	"sdmm/internal/app/prefs"
@@ -32,7 +34,12 @@ import (
 	"github.com/sqweek/dialog"
 )
 
-const collaborationActionTimeout = 15 * time.Second
+const (
+	collaborationActionTimeout         = 15 * time.Second
+	hostedCollaborationActionTimeout   = 2 * time.Minute
+	hostedCollaborationSignInTimeout   = 5 * time.Minute
+	hostedCollaborationSignInPollDelay = time.Second
+)
 
 /*
 	File similar to action.go, but contains methods triggered by user. (ex. when button clicked)
@@ -179,6 +186,142 @@ func (a *app) DoCreateLocalCollaborationSession() {
 		util.ShowErrorDialog("Unable to start collaboration: no map is active")
 		return
 	}
+	ownerName := "Owner"
+	dial.Open(dial.TypeCustom{
+		Title:       "Start Local Collaboration Session",
+		CloseButton: true,
+		Layout: w.Layout{
+			w.Text("Choose the name other participants will see."),
+			w.InputTextWithHint("##collaboration-owner-name", "Display name", &ownerName).Width(-1),
+			w.Button("Start Session", func() {
+				displayName := strings.TrimSpace(ownerName)
+				if displayName == "" {
+					util.ShowErrorDialog("Unable to start collaboration: display name is required")
+					return
+				}
+				if a.CurrentEditor() != selectedEditor || a.HasActiveCollaboration() {
+					util.ShowErrorDialog("Unable to start collaboration: the active map or session changed")
+					return
+				}
+				imgui.CloseCurrentPopup()
+				a.createLocalCollaborationSession(selectedEditor, displayName)
+			}),
+		},
+	})
+}
+
+func (a *app) DoSignInHostedCollaboration() {
+	if a.collaborationClient == nil || a.HasActiveCollaboration() {
+		return
+	}
+	hostedURL := collabui.DefaultHostedOrigin
+	dial.Open(dial.TypeCustom{
+		Title:       "Sign In to Hosted Collaboration",
+		CloseButton: true,
+		Layout: w.Layout{
+			w.Text("Enter the HTTPS address of the hosted collaboration service."),
+			w.InputTextWithHint("##collaboration-hosted-url", "https://collaboration.example", &hostedURL).Width(-1),
+			w.Button("Sign In", func() {
+				baseURL := strings.TrimSpace(hostedURL)
+				if baseURL == "" {
+					util.ShowErrorDialog("Unable to sign in: hosted service address is required")
+					return
+				}
+				if a.HasActiveCollaboration() || a.collaborationClient.HostedSignedIn() {
+					util.ShowErrorDialog("Unable to sign in: the collaboration state changed")
+					return
+				}
+				imgui.CloseCurrentPopup()
+				go a.signInHostedCollaboration(baseURL)
+			}),
+		},
+	})
+}
+
+func (a *app) signInHostedCollaboration(baseURL string) {
+	ctx, cancel := context.WithTimeout(context.Background(), hostedCollaborationSignInTimeout)
+	defer cancel()
+	signIn, err := a.collaborationClient.BeginHostedSignIn(ctx, baseURL)
+	if err == nil {
+		err = open.Run(signIn.AuthorizationURL)
+	}
+	for err == nil {
+		err = a.collaborationClient.CompleteHostedSignIn(ctx, signIn)
+		if !errors.Is(err, collabui.ErrHostedSignInPending) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-time.After(hostedCollaborationSignInPollDelay):
+			err = nil
+		}
+	}
+	window.RunLater(func() {
+		if err != nil {
+			log.Error().Err(err).Msg("Unable to sign in to hosted collaboration")
+			util.ShowErrorDialog("Unable to sign in to hosted collaboration: " + err.Error())
+			return
+		}
+		log.Info().Msg("signed in to hosted collaboration")
+	})
+}
+
+func (a *app) DoCreateHostedCollaborationSession() {
+	selectedEditor := a.CurrentEditor()
+	if selectedEditor == nil || a.collaborationClient == nil || !a.collaborationClient.HostedSignedIn() || a.HasActiveCollaboration() {
+		return
+	}
+	snapshot, err := selectedEditor.CollaborationSnapshot(context.Background())
+	if err != nil {
+		util.ShowErrorDialog("Unable to start hosted collaboration: " + err.Error())
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), hostedCollaborationActionTimeout)
+		defer cancel()
+		invitation, prepareErr := a.collaborationClient.CreateHosted(ctx, snapshot)
+		var execution executor.Executor
+		if prepareErr == nil {
+			execution, prepareErr = collabui.PrepareJoinedSession(ctx, a.collaborationController, a.collaborationClient, invitation)
+		}
+		window.RunLater(func() {
+			if prepareErr != nil {
+				log.Error().Err(prepareErr).Msg("Unable to start hosted collaboration")
+				util.ShowErrorDialog("Unable to start hosted collaboration: " + prepareErr.Error())
+				return
+			}
+			attachErr := collabui.AttachPreparedSession(execution, selectedEditor, a.CurrentEditor() == selectedEditor)
+			if attachErr == nil {
+				a.collaborationEditor = selectedEditor
+				return
+			}
+			log.Error().Err(attachErr).Msg("Unable to attach hosted collaboration session")
+			util.ShowErrorDialog("Unable to attach hosted collaboration session: " + attachErr.Error())
+			go a.leaveCollaborationAfterAttachmentFailure()
+		})
+	}()
+}
+
+func (a *app) DoSignOutHostedCollaboration() {
+	client := a.collaborationClient
+	if client == nil || a.HasActiveCollaboration() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		err := client.SignOutHosted(ctx)
+		window.RunLater(func() {
+			if err != nil {
+				log.Error().Err(err).Msg("Unable to sign out of hosted collaboration")
+				util.ShowErrorDialog("Unable to sign out of hosted collaboration: " + err.Error())
+			}
+		})
+	}()
+}
+
+func (a *app) createLocalCollaborationSession(selectedEditor *editor.Editor, displayName string) {
 	snapshot, err := selectedEditor.CollaborationSnapshot(context.Background())
 	if err != nil {
 		util.ShowErrorDialog("Unable to start collaboration: " + err.Error())
@@ -187,7 +330,7 @@ func (a *app) DoCreateLocalCollaborationSession() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
 		defer cancel()
-		execution, prepareErr := collabui.PrepareLocalSession(ctx, a.collaborationController, a.collaborationClient, snapshot)
+		execution, prepareErr := collabui.PrepareNamedLocalSession(ctx, a.collaborationController, a.collaborationClient, snapshot, displayName)
 		window.RunLater(func() {
 			if prepareErr != nil {
 				log.Error().Err(prepareErr).Msg("Unable to start collaboration")
@@ -238,9 +381,20 @@ func (a *app) DoJoinCollaborationSession() {
 }
 
 func (a *app) joinCollaborationSession(invitation collabui.Invitation, selectedEditor *editor.Editor) {
-	ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+	timeout := collaborationActionTimeout
+	if invitation.Hosted {
+		timeout = hostedCollaborationActionTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	execution, prepareErr := collabui.PrepareJoinedSession(ctx, a.collaborationController, a.collaborationClient, invitation)
+	var prepareErr error
+	if invitation.Hosted {
+		invitation, prepareErr = a.collaborationClient.RedeemHostedInvitation(ctx, invitation)
+	}
+	var execution executor.Executor
+	if prepareErr == nil {
+		execution, prepareErr = collabui.PrepareJoinedSession(ctx, a.collaborationController, a.collaborationClient, invitation)
+	}
 	window.RunLater(func() {
 		if prepareErr != nil {
 			log.Error().Err(prepareErr).Msg("Unable to join collaboration")
@@ -285,6 +439,22 @@ func (a *app) DoCopyCollaborationInvitation(role collabui.InvitationRole, displa
 		window.RunLater(func() {
 			util.ShowErrorDialog("Unable to create collaboration invitation: " + err.Error())
 		})
+	}()
+}
+
+func (a *app) DoUpdateCollaborationDisplayName(displayName string) {
+	client := a.collaborationClient
+	if client == nil || !a.HasActiveCollaboration() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), collaborationActionTimeout)
+		defer cancel()
+		if err := client.UpdateDisplayName(ctx, displayName); err != nil {
+			window.RunLater(func() {
+				util.ShowErrorDialog("Unable to update collaboration display name: " + err.Error())
+			})
+		}
 	}()
 }
 
@@ -383,6 +553,10 @@ func (a *app) DoResolveCollaborationConflict(operationID model.OperationID, acti
 
 func (a *app) HasActiveCollaboration() bool {
 	return a.collaborationController != nil && a.collaborationController.Active()
+}
+
+func (a *app) HasHostedCollaborationSignIn() bool {
+	return a.collaborationClient != nil && a.collaborationClient.HostedSignedIn()
 }
 
 func (a *app) DoOpenCollaborationPanel() {

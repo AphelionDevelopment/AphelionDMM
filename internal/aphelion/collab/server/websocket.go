@@ -185,7 +185,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 	}
 	replayCount := 0
 	for _, accepted := range replay {
-		if accepted.Revision > join.AcknowledgedRevision {
+		if accepted.Revision > join.AcknowledgedRevision && accepted.Revision <= snapshot.Revision {
 			replayCount++
 		}
 	}
@@ -195,7 +195,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 		replayContext, finishReplay = service.telemetry.Replay(parent, replayCount)
 	}
 	for _, accepted := range replay {
-		if accepted.Revision <= join.AcknowledgedRevision {
+		if accepted.Revision <= join.AcknowledgedRevision || accepted.Revision > snapshot.Revision {
 			continue
 		}
 		acceptedHash, found, hashErr := service.store.RevisionHash(replayContext, snapshot.DocumentID, accepted.Revision)
@@ -255,6 +255,9 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 			if !open {
 				_ = connection.Close(CloseSlowConsumer, "durable consumer fell behind")
 				return fmt.Errorf("durable subscriber fell behind")
+			}
+			if accepted.Revision <= snapshot.Revision {
+				continue
 			}
 			acceptedHash, found, hashErr := service.store.RevisionHash(parent, accepted.DocumentID, accepted.Revision)
 			if hashErr != nil {
@@ -333,6 +336,17 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 		presence := message.Payload.(*protocol.PresenceUpdatePayload)
 		if err := service.hub.UpdatePresence(auth.sessionID, auth.principal, PresenceUpdate{Sequence: presence.Sequence, Cursor: presence.Cursor, Selection: presence.Selection, Status: presence.Status}); err != nil {
 			return fmt.Errorf("update presence: %w", err)
+		}
+		return nil
+	case protocol.ClientProfileUpdate:
+		profile := message.Payload.(*protocol.ProfileUpdatePayload)
+		if auth.hosted && service.config.HostedRegistry != nil {
+			if err := service.config.HostedRegistry.UpdateHostedMemberDisplayName(ctx, auth.sessionID, auth.principal.ActorID(), profile.DisplayName); err != nil {
+				return fmt.Errorf("persist hosted display name: %w", err)
+			}
+		}
+		if err := service.hub.UpdateDisplayName(auth.sessionID, auth.principal, profile.DisplayName); err != nil {
+			return fmt.Errorf("update display name: %w", err)
 		}
 		return nil
 	case protocol.ClientOperationSubmit:
