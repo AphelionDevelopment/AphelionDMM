@@ -1,200 +1,102 @@
-# Strong Dream Map Maker &middot; [![GitHub release](https://img.shields.io/github/release/SpaiR/StrongDMM.svg?label=StrongDMM)](https://github.com/SpaiR/StrongDMM/releases/latest) [![Github All Releases](https://img.shields.io/github/downloads/SpaiR/StrongDMM/total.svg?logo=github)](https://github.com/SpaiR/StrongDMM/releases) ![CI](https://github.com/SpaiR/StrongDMM/workflows/CI/badge.svg)
+# AphelionDMM
 
-<p align="center"><b>Download StrongDMM</b></p>
-<p align="center">
-  <a href="https://bit.ly/sdmm-windows">
-    <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows download link"/>
-  </a>
-  <a href="https://bit.ly/sdmm-linux">
-    <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux download link"/>
-  </a>
-  <a href="https://bit.ly/sdmm-macos">
-    <img src="https://img.shields.io/badge/mac%20os-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS download ink"/>
-  </a>
-</p>
+AphelionDMM is a downstream fork of StrongDMM focused on deterministic editing and multiplayer collaboration.
 
----
+## Project identity
 
-<img align="right" width="150" src="https://raw.githubusercontent.com/SpaiR/StrongDMM/master/docs/sdmm-logo.png" alt="StrongDMM Logo">
+This fork does not claim to be an independently originated map editor, and it does not seek to replace StrongDMM's identity with a major identity of its own. The editor, its core workflows, and most of the foundation on which AphelionDMM is built exist because human authors and developers created, maintained, reviewed, documented, and supported StrongDMM and its dependencies.
 
-StrongDMM is an alternative yet robust map editor for BYOND.
+Anyone interested in this project should first visit the upstream project, learn from its documentation, and support its authors and contributors. AphelionDMM should be understood as downstream engineering built on that work. Fork-specific bug reports and multiplayer work belong here; improvements that apply generally to StrongDMM should be considered for upstream contribution.
 
-It was built with the idea of creating a more flexible, fast, and extensible tool than the BYOND built-in map editor.
-The editor has the same features as DM, but provides much more and improves the general map editing experience.
+## Upstream project and support
 
-## Features
+The upstream, author, support, documentation, and inherited-project links are intentionally kept together here:
 
-The editor offers a range of new features:
+- **StrongDMM:** [source repository](https://github.com/SpaiR/StrongDMM), [documentation and usage guide](https://github.com/SpaiR/StrongDMM/blob/main/README.md), [releases and verified downloads](https://github.com/SpaiR/StrongDMM/releases), [issue tracker](https://github.com/SpaiR/StrongDMM/issues), [pull requests](https://github.com/SpaiR/StrongDMM/pulls), [build pipeline](https://github.com/SpaiR/StrongDMM/actions/workflows/ci.yml), and [contributors](https://github.com/SpaiR/StrongDMM/graphs/contributors).
+- **Original author and direct support:** [SpaiR on GitHub](https://github.com/SpaiR), [support StrongDMM through Ko-fi](https://ko-fi.com/P5P5BF17Q), or use the [public contact address](mailto:despsolver@gmail.com) published by the upstream project.
+- **Inherited parser work:** [SpacemanDMM](https://github.com/SpaceManiac/SpacemanDMM), created by [SpaceManiac](https://github.com/SpaceManiac).
+- **Inherited application icon:** designed by [Clément "Topy"](https://github.com/clement-or).
 
-* TGM support with built-in map merger (no need to use external scripts and pre-commit hooks);
-* Almost instant environment open;
-* Custom layers filter;
-* Built-in screenshot tool;
-* Smooth zoom-in/zoom-out;
-* Robust "Search";
-* Improved shortcuts;
-* Robust variables editor and variables preview;
-* Optional sanitization of variables;
-* Open with CLI.
+For ordinary map-editor features, installation-free usage, CLI examples, keyboard and mouse controls, FAQ answers, platform prerequisites, and the original build explanation, use the StrongDMM documentation linked above. Those instructions remain the baseline unless this README or the fork documentation explicitly describes a divergence.
 
-...and a lot more...
+## How this fork differs
 
-<p align="center">
-  <img width="450" src="https://raw.githubusercontent.com/SpaiR/StrongDMM/master/docs/sdmm-example.png" alt="StrongDMM Example">
-</p>
+AphelionDMM preserves the inherited StrongDMM editor, DMM/TGM handling, Dear ImGui desktop interface, search and variable-editing tools, screenshots, layers, shortcuts, CLI opening, and vendored Rust parser. Its principal downstream changes are:
 
-## How to Use
+- **Deterministic map operations.** Local and collaborative edits pass through a shared operation/executor layer with stable revisions, map hashes, conflict behavior, actor-aware inverse operations, and atomic save paths.
+- **Desktop collaboration.** The editor adds local and online session controls, owner/editor/viewer roles, invitations, display profiles, presence, conflicts, undo/redo integration, explicit reconnect, and local collaboration status.
+- **Client-owned online sessions.** The current protocol-v2 design keeps durable map and operation state on participating clients. The session owner orders accepted work while a stateless WebSocket relay routes bounded, signed, end-to-end encrypted frames.
+- **Local durability and recovery.** SQLite-backed client state, installation identities, replay/snapshot reconciliation, revision/hash checks, and owner-first relay recovery protect acknowledged work without requiring a server-side map database.
+- **Self-hostable relay operations.** The public relay is configurable, and a native Windows service package installs and supervises a dedicated Cloudflare connector without requiring a container runtime or modifying another application's tunnel.
+- **Versioned integration contracts.** Staged-map manifests and verification tooling provide narrow integration boundaries for Meridian-Rift and Meridian-MCP without making those projects part of the collaboration transport.
+- **Expanded engineering gates.** The fork adds protocol compatibility fixtures, fuzzing, race and fault tests, load scenarios, privacy checks, hosted-operation evidence, security guidance, and human pilot procedures.
 
-StrongDMM is a single executable, which doesn't require any installation.
-You can download it from any of the provided links and start it right away.
+The older server-authoritative protocol-v1 implementation and its PostgreSQL/OIDC deployment material remain in the repository as a labeled compatibility path. They are not the target architecture for protocol-v2 collaboration.
 
-**Download Links:**
+## Current status
 
-* [Windows](https://bit.ly/sdmm-windows)
-* [Linux](https://bit.ly/sdmm-linux)
-* [macOS](https://bit.ly/sdmm-macos)
+AphelionDMM multiplayer is under active development and testing. Local automated gates and same-machine collaboration exercises do not constitute public acceptance. The remaining acceptance path is recorded in the [multiplayer progression sheet](docs/superpowers/plans/2026-08-26-final-multiplayer-progression-sheet.md), and testers should use the [client-owned relay human test guide](docs/testing/client-owned-relay-human-test-guide.md).
 
-[Release](https://github.com/SpaiR/StrongDMM/releases/latest) page contains all distributed files. It also has `sha256` hashes info for every executable for validation purposes.
+Notable current boundaries:
 
-### CLI Usage
+- the default public relay is intended to be `https://mapping.a13.info`, but clients may configure another compatible HTTPS relay;
+- collaboration pauses when the owner is unavailable;
+- relay restarts recover from client state and require owner-first reconnection;
+- automatic reconnect is not claimed for the first pilot;
+- protocol support for owner transfer exists, but the complete desktop transfer workflow remains deferred from first-pilot acceptance;
+- ordinary single-user editing remains supported and must not require a network service.
 
-StrongDMM do support CLI to quickly open maps. Provide `.dme` or `.dmm` files as program arguments:
+## Using the editor
 
-###### With DME
+AphelionDMM continues to build the desktop executable as `StrongDMM.exe` pending any separately approved branding change. The inherited editor remains installation-free. For general editing and CLI usage, follow the upstream documentation collected under [Upstream project and support](#upstream-project-and-support).
+
+Fork-specific collaboration testing begins with:
+
+- [Client-owned relay human test guide](docs/testing/client-owned-relay-human-test-guide.md)
+- [Multiplayer human test guide](docs/testing/multiplayer-human-test-guide.md)
+- [Windows relay operator guide](deploy/relay/README.md)
+
+Invitations and collaboration logs may contain sensitive session information. Do not publish invitation links, keys, client databases, or unredacted logs.
+
+## Building this fork
+
+The upstream build documentation explains the inherited Go, Rust, CGO, and platform dependencies. This fork pins its authoritative versions in `go.mod`, the Rust toolchain invocations in `Taskfile.yml`, and CI.
+
+Current Windows requirements include:
+
+- Go 1.25.13;
+- Rust 1.82.0 with the `x86_64-pc-windows-gnu` toolchain;
+- MinGW-w64 for CGO;
+- Task 3.x;
+- PowerShell for the relay packaging and service operator path.
+
+From the repository root:
+
+```powershell
+task build
+task test-go
+task test-rust
+task verify-relay
 ```
-strongdmm.exe path/to/environment.dme ./map1.dmm ../path/map2.dmm
+
+`task build` writes the editor to `dst/StrongDMM.exe`. To create the self-contained Windows relay-server ZIP:
+
+```powershell
+task package-relay-windows
 ```
 
-###### Without DME
-```
-strongdmm.exe ./map1.dmm ../path/map2.dmm
-```
+The package is written below `dst/relay-package/`. A server installing that ZIP does not need Go, Rust, Git, the source repository, or a container runtime.
 
-When providing `.dmm` files without `.dme`, a proper environment file will be found automatically.
+## Fork documentation
 
-## Support
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P5BF17Q)
-
-StrongDMM was developed without any monetization in mind. The main motivation is the enthusiasm for creating cool stuff.\
-Your support can demonstrate your appreciation and will motivate further development of the project.
-
-Additionally, if you have specific features in mind that you'd like implemented in the editor, we can focus on your needs.\
-Feel free to reach out to me through my public contact to discuss details: [E-Mail](mailto:despsolver@gmail.com)
-
-## FAQ
-
-**Q.** My antivirus software detects something suspicious in the editor binaries. Is it ok?\
-**A.** Yes, it's a false positive reaction to the way Golang, the development language, creates binaries. Read more: [Golang FAQ](https://go.dev/doc/faq#virus)
-
-**Q.** How do I verify my executables?\
-**A.** Verify them using `sha256` hashes, available on the [releases page](https://github.com/SpaiR/StrongDMM/releases/latest).
-
-**Q.** But how can I trust executables on the release page?\
-**A.** Executables are built with the [CI pipeline](https://github.com/SpaiR/StrongDMM/actions/workflows/ci.yml). You can verify the process yourself or build the executables manually from the source code.
-
-**Q.** How to uninstall the editor?\
-**A.** StrongDMM doesn't require installation, so no specific uninstallation process is needed. Simply delete the executable and, if desired, its directory on your OS to remove editor data.
-
-**Q.** Where do I find editor data?\
-**A.** For Windows: `C:\Users\USER\AppData\Roaming\StrongDMM`, for Linux/macOS: `~/.strongdmm`.
-
-**Q.** How to move the map?\
-**A.** Drag the map using the **middle mouse button**, or by holding the **space key**. Alternatively, you can use the **arrow keys**.
-
-**Q.** How to zoom?\
-**A.** Zoom using your mouse scroll wheel or the **+/- keys** on the keyboard.
-
-**Q.** How to change the save format?\
-**A.** Go to `File -> Preferences...` in the menu bar and select the desired format.
-
-**Q.** The editor crashed. Where can I find logs?\
-**A.** Access logs via the menu: `Help -> Open Logs Folder`.
-
-## How to Build
-
-Building the application involves two steps:
-
-1. Build the **sdmmparser** library;
-2. Build the editor.
-
-**sdmmparser** is a Rust library based on the [SpacemanDMM](https://github.com/SpaceManiac/SpacemanDMM) parser and is compiled to a `staticlib`.
-It can be found at `/third_party/sdmmparser/src`.
-
-### Prerequisites
-
-* [Go](https://go.dev/): version **1.23** or higher.
-* [Rust](https://www.rust-lang.org/): version **1.82.0** or higher.
-* [Task](https://taskfile.dev): for running build scripts. (Optional, but recommended)
-
-#### For Windows
-
-* [MinGW-w64](https://www.mingw-w64.org/)
-
-##### How to install
-
-MinGW can be installed through package managers like choco (Chocolatey) or downloaded and installed directly from the MinGW website. 
-After installation, make sure the bin directory of MinGW (which contains gcc.exe) is in your system's PATH.
-
-##### Why to use MinGW
-
-MinGW, short for Minimalist GNU for Windows, is a lightweight development environment providing essential tools like a C compiler for Windows. 
-It is required as the application uses `cgo` to integrate C libraries, enabling the build and compilation of `cgo` code and ensuring all dependencies are handled properly. 
-
-Unlike MSVC (Microsoft Visual C++), which uses different conventions and linkers incompatible with `cgo`, 
-MinGW is designed to work seamlessly with Go's build system, making it the preferred choice for compiling `cgo` code on Windows.
-
-Alternatively, you can use WSL (Windows Subsystem for Linux) to provide a Linux-like environment that supports cgo and C compilers compatible with Go.
-In that case look [for linux](#for-linux) dependencies.
-
-#### For Linux
-
-You may need to install dependencies for building GUI apps:
-
-- **`apt` (Debian, Ubuntu):** `sudo apt install xorg-dev libgtk-3-dev`
-- **`yum` (Red Hat, CentOS, Fedora):** `sudo yum install xorg-x11-server-devel gtk3-devel`
-- **`dnf` (Fedora, newer Red Hat and CentOS):** `sudo dnf install xorg-x11-server-devel gtk3-devel`
-- **`pacman` (Arch Linux):** `sudo pacman -S xorg-server-devel gtk3`
-- **`zypper` (openSUSE):** `sudo zypper install xorg-x11-server-devel gtk3-devel`
-- **`dnf` or `yum` (Amazon Linux):** `sudo dnf install xorg-x11-server-devel gtk3-devel`
-- **`apk` (Alpine Linux):** `sudo apk add xorg-server-dev gtk+3.0-dev`
-
-### Steps
-
-#### Using Task (Recommended)
-
-Task is a cross-platform Make alternative with scripts in `Taskfile.yml`.
-
-With Task installed:
-
-* `task build`: Builds sdmmparser and the editor (output in `dst` directory).
-* `task run`: Runs the editor (compiles first if needed).
-
-#### Manually
-
-1. Build the **sdmmparser** library:
-    1. Navigate to `third_party/sdmmparser/src`
-    2. Run command:
-        * **Windows:** `set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu && cargo build --release`
-        * **Linux / macOS:** `cargo build --release`
-2. In the root directory:
-    * `go build .`: Builds the editor (executable named `sdmm.exe`/`sdmm` in the root).
-    * `go run .`: Runs the editor.
-
-Step #1 is required only when the **sdmmparser** is modified.
-
-##### Why Use a Custom RUSTUP_TOOLCHAIN
-
-The **sdmmparser** library is compiled into a `staticlib` that is linked into the final Go binary.\
-The MSVC toolchain is not compatible with Go, as Go relies on the GNU toolchain for CGO (the mechanism that compiles C code natively within Go).
-Using a custom `RUSTUP_TOOLCHAIN` ensures that the Rust library is compiled in a way that aligns with Go's requirements, 
-avoiding compatibility issues and ensuring smooth integration.
-
-## Credits
-
-StrongDMM uses [SpacemanDMM](https://github.com/SpaceManiac/SpacemanDMM) parser made
-by [SpaceManiac](https://github.com/SpaceManiac). \
-The application icon is designed by [Clément "Topy"](https://github.com/clement-or).
+- [Documentation index](docs/index.md)
+- [Agent and contributor guidance](docs/agent/README.md)
+- [Current architecture](docs/agent/architecture.md)
+- [Security and networking rules](docs/agent/security-and-networking.md)
+- [Verification requirements](docs/agent/verification.md)
+- [Upstream reconciliation policy](docs/agent/upstream-drift.md)
+- [Relay hosting handoff](docs/hosting/game-server-deployment-agent-handoff.md)
 
 ## License
 
-See the LICENSE file for license rights and limitations (GPL-3.0).
+AphelionDMM remains distributed under the inherited GPL-3.0 license. See [LICENSE](LICENSE) for the applicable rights and obligations. Copyright and attribution remain with their respective authors and contributors.
