@@ -90,7 +90,7 @@ func (store *Store) ListPending(ctx context.Context, sessionID string) ([]collab
 	if err != nil {
 		return nil, fmt.Errorf("list pending submissions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]collabstore.PendingSubmission, 0)
 	for rows.Next() {
 		var encoded []byte
@@ -149,7 +149,7 @@ func (store *Store) ApplyAccepted(ctx context.Context, sessionID string, accepte
 	if err != nil {
 		return fmt.Errorf("begin accepted replica operation: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() { _ = transaction.Rollback() }()
 	var documentID model.DocumentID
 	if err := transaction.QueryRowContext(ctx, "SELECT document_id FROM client_sessions WHERE session_id = ?", sessionID).Scan(&documentID); err != nil {
 		return fmt.Errorf("load accepted replica session: %w", err)
@@ -239,7 +239,7 @@ func (store *Store) SaveManifest(ctx context.Context, sessionID string, manifest
 	if err != nil {
 		return fmt.Errorf("begin manifest replacement: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() { _ = transaction.Rollback() }()
 	result, err := transaction.ExecContext(ctx, "UPDATE client_sessions SET manifest = ?, manifest_sha256 = ? WHERE session_id = ?", manifest, digest[:], sessionID)
 	if err != nil {
 		return fmt.Errorf("update manifest: %w", err)
@@ -274,7 +274,7 @@ func (store *Store) ListAdmissions(ctx context.Context, sessionID string) ([]col
 	if err != nil {
 		return nil, fmt.Errorf("list admissions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]collabstore.Admission, 0)
 	for rows.Next() {
 		var capability, actor []byte
@@ -315,7 +315,7 @@ func (store *Store) ReplaceReplica(ctx context.Context, session collabstore.Loca
 	if err != nil {
 		return fmt.Errorf("begin replica replacement: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() { _ = transaction.Rollback() }()
 	var documentID model.DocumentID
 	if err := transaction.QueryRowContext(ctx, "SELECT document_id FROM client_sessions WHERE session_id = ?", session.SessionID).Scan(&documentID); err != nil {
 		return fmt.Errorf("load replica session: %w", err)

@@ -68,6 +68,8 @@ tasks:
       - task: build-editor
 
   test-go:
+    deps:
+      - build-parser
     cmds:
       - go test ./... -count=1
 

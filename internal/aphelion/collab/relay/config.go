@@ -69,7 +69,7 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("open relay config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 	var config Config

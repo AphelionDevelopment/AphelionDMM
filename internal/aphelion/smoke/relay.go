@@ -31,7 +31,7 @@ func RunRelayTransport(ctx context.Context, endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("connect smoke owner: %w", err)
 	}
-	defer owner.Close()
+	defer func() { _ = owner.Close() }()
 	var capability [32]byte
 	if _, err := rand.Read(capability[:]); err != nil {
 		return err
@@ -43,7 +43,7 @@ func RunRelayTransport(ctx context.Context, endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("connect smoke editor: %w", err)
 	}
-	defer editor.Close()
+	defer func() { _ = editor.Close() }()
 	var groupKey protocolv2.GroupKey
 	if _, err := rand.Read(groupKey[:]); err != nil {
 		return err

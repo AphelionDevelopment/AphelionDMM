@@ -118,7 +118,7 @@ func (service *Service) handleWebSocket(writer http.ResponseWriter, request *htt
 		return
 	}
 	connection.SetReadLimit(int64(service.config.Limits.MaxMessageBytes + 256))
-	defer connection.CloseNow()
+	defer func() { _ = connection.CloseNow() }()
 	ctx, cancel := context.WithCancel(request.Context())
 	defer cancel()
 	readContext, cancelRead := context.WithTimeout(ctx, initialFrameTimeout)

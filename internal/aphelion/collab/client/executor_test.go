@@ -47,7 +47,9 @@ func TestNetworkExecutorAcceptRejectAndInverse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash}))
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash})); err != nil {
+		t.Fatal(err)
+	}
 	if executeErr := <-errorsFound; executeErr != nil {
 		t.Fatal(executeErr)
 	}
@@ -81,7 +83,9 @@ func TestNetworkExecutorAcceptRejectAndInverse(t *testing.T) {
 		t.Fatal(err)
 	}
 	rejectedID := rejectedDecoded.Payload.(*protocol.OperationSubmitPayload).Operation.OperationID
-	network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: rejectedID, Code: "precondition_failed", Message: "conflict", Revision: 1, MapHash: acceptedHash}))
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: rejectedID, Code: "precondition_failed", Message: "conflict", Revision: 1, MapHash: acceptedHash})); err != nil {
+		t.Fatal(err)
+	}
 	if executeErr := <-rejectedErrors; !errors.Is(executeErr, ErrOperationRejected) {
 		t.Fatalf("Execute(rejected) error = %v, want %v", executeErr, ErrOperationRejected)
 	}
@@ -116,11 +120,15 @@ func TestNetworkExecutorIgnoresExactAcceptedDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	envelope := serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})
-	network.Receive(envelope)
+	if err := network.Receive(envelope); err != nil {
+		t.Fatal(err)
+	}
 	if executeErr := <-result; executeErr != nil {
 		t.Fatal(executeErr)
 	}
-	network.Receive(envelope)
+	if err := network.Receive(envelope); err != nil {
+		t.Fatal(err)
+	}
 
 	network.mutex.Lock()
 	terminal := network.terminal
@@ -213,7 +221,9 @@ func TestNetworkExecutorSuspendsOnAcceptedRevisionGap(t *testing.T) {
 	}
 	operation := projectionOperation(t, snapshot, 1)
 	accepted := model.AcceptedOperation{Operation: operation, Revision: snapshot.Revision + 2, AcceptedAt: time.Unix(1, 0)}
-	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: strings.Repeat("a", 64)}))
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: strings.Repeat("a", 64)})); err == nil {
+		t.Fatal("accepted revision gap was ignored")
+	}
 	network.mutex.Lock()
 	terminal := network.terminal
 	suspended := network.suspended
@@ -252,13 +262,15 @@ func TestNetworkExecutorConflictRefreshDiscardAndRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{
 		OperationID: submission.OperationID,
 		Code:        "precondition_failed",
 		Message:     "conflict",
 		Revision:    snapshot.Revision,
 		MapHash:     mapHash,
-	}))
+	})); err != nil {
+		t.Fatal(err)
+	}
 	if executeErr := <-rejected; !errors.Is(executeErr, ErrOperationRejected) {
 		t.Fatalf("Execute() error = %v, want %v", executeErr, ErrOperationRejected)
 	}
@@ -380,7 +392,9 @@ func TestNetworkExecutorExecuteAsyncDoesNotWaitForAcknowledgement(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash}))
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case result := <-results:
 		if result.err != nil || result.accepted.Revision != 1 {
@@ -479,7 +493,9 @@ func TestNetworkExecutorSuspendsAndResumesOnFreshTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash}))
+	if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})); err != nil {
+		t.Fatal(err)
+	}
 	result := <-acceptedResult
 	if result.err != nil || result.accepted.OperationID != operation.OperationID {
 		t.Fatalf("resumed execution = %#v", result)
@@ -553,7 +569,9 @@ func executeWhileReceiving(t *testing.T, network *NetworkExecutor, received <-ch
 	for {
 		select {
 		case message := <-received:
-			network.Receive(message)
+			if err := network.Receive(message); err != nil {
+				t.Fatal(err)
+			}
 		case result := <-results:
 			if result.err != nil {
 				t.Fatal(result.err)

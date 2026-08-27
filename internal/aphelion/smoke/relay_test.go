@@ -71,7 +71,7 @@ observability:
 			if requestErr != nil {
 				return false
 			}
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			return response.StatusCode == http.StatusOK
 		}, 10*time.Second, 25*time.Millisecond, "relay did not become ready")
 		smokeContext, cancelSmoke := context.WithTimeout(context.Background(), 10*time.Second)

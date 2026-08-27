@@ -51,7 +51,7 @@ func (store *platformStore) Put(ctx context.Context, name string, value []byte) 
 	temporaryPath := temporary.Name()
 	committed := false
 	defer func() {
-		temporary.Close()
+		_ = temporary.Close()
 		if !committed {
 			_ = os.Remove(temporaryPath)
 		}

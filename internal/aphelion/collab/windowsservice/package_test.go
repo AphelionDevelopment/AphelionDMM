@@ -54,7 +54,7 @@ func TestServiceScriptBuildsAndValidatesDockerFreePackage(t *testing.T) {
 	require.NoError(t, err, string(output))
 	archive, err := zip.OpenReader(archivePath)
 	require.NoError(t, err)
-	defer archive.Close()
+	defer func() { _ = archive.Close() }()
 	for _, file := range archive.File {
 		name := filepath.ToSlash(file.Name)
 		require.NotContains(t, name, "Dockerfile")

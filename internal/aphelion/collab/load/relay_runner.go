@@ -42,7 +42,7 @@ func LoadRelayBundle(path string) (RelayBundle, error) {
 	if err != nil {
 		return RelayBundle{}, fmt.Errorf("open relay load bundle: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, (1<<20)+1))
 	decoder.DisallowUnknownFields()
 	var bundle RelayBundle
@@ -70,7 +70,7 @@ func RunRelay(ctx context.Context, bundle RelayBundle, messagesPerParticipant in
 	if err != nil {
 		return RelayResult{}, err
 	}
-	defer owner.Close()
+	defer func() { _ = owner.Close() }()
 	admissions := make([]protocolv2.AdmissionControl, len(decoded.participants))
 	for index, participant := range decoded.participants {
 		var actor protocolv2.ActorKey

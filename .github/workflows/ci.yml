@@ -72,6 +72,8 @@ jobs:
           workspaces: third_party/sdmmparser/src
 
       - name: Test Go
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
         run: task test-go
 
       - name: Test Rust
@@ -114,6 +116,25 @@ jobs:
           go-version-file: go.mod
           architecture: x64
           cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust
+        run: rustup toolchain install 1.82.0-x86_64-unknown-linux-gnu --profile minimal
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: third_party/sdmmparser/src
+
+      - name: Build Parser for Go
+        env:
+          RUST_TARGET: 1.82.0-x86_64-unknown-linux-gnu
+        run: task build-parser
 
       - name: Collaboration Race Gate
         run: go test -race ./internal/aphelion/... -count=1
@@ -209,20 +230,22 @@ jobs:
         run: |
           $packageRoot = Join-Path $env:RUNNER_TEMP 'relay-package'
           $stage = Join-Path $packageRoot 'AphelionDMM-Relay-Windows-x64'
-          $installRoot = Join-Path $env:RUNNER_TEMP 'installed-relay'
-          $dataRoot = Join-Path $env:RUNNER_TEMP 'relay-data'
-          $installed = $false
+          $installRoot = Join-Path $env:ProgramFiles "AphelionDMM Relay CI $env:GITHUB_RUN_ID"
+          $dataRoot = Join-Path $env:ProgramData "AphelionDMM\Relay-CI-$env:GITHUB_RUN_ID"
           try {
             & (Join-Path $stage 'service.ps1') -Action Install -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
-            $installed = $true
             Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
             & (Join-Path $stage 'service.ps1') -Action Stop -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
             & (Join-Path $stage 'service.ps1') -Action Start -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
             Invoke-RestMethod http://127.0.0.1:8080/v1/version
             & (Join-Path $stage 'service.ps1') -Action Update -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
             Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
+          } catch {
+            Get-CimInstance -ClassName Win32_Service -Filter "Name='AphelionDMMRelay'" -ErrorAction SilentlyContinue | Format-List Name, State, StartMode, StartName, PathName, ExitCode
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'AphelionDMMRelay' } -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
+            throw
           } finally {
-            if ($installed) {
+            if (Get-Service -Name 'AphelionDMMRelay' -ErrorAction SilentlyContinue) {
               & (Join-Path $stage 'service.ps1') -Action Uninstall -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot -PurgeData
             }
           }

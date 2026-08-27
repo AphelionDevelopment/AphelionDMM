@@ -33,7 +33,7 @@ func runWindowsService(arguments []string) (bool, error) {
 	if err != nil {
 		return true, fmt.Errorf("open Windows event source %s: %w", windowsServiceName, err)
 	}
-	defer log.Close()
+	defer func() { _ = log.Close() }()
 	output := &eventLogWriter{log: log}
 	handler := &windowsServiceHandler{arguments: arguments, output: output, run: run}
 	if err := svc.Run(windowsServiceName, handler); err != nil {

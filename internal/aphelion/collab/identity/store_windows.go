@@ -51,7 +51,7 @@ func (store *platformStore) Put(ctx context.Context, name string, value []byte) 
 	temporaryPath := temporary.Name()
 	committed := false
 	defer func() {
-		temporary.Close()
+		_ = temporary.Close()
 		if !committed {
 			_ = os.Remove(temporaryPath)
 		}
@@ -135,7 +135,7 @@ func protectData(plaintext []byte, entropy []byte) ([]byte, error) {
 	if err := windows.CryptProtectData(&input, nil, &optionalEntropy, 0, nil, windows.CRYPTPROTECT_UI_FORBIDDEN, &output); err != nil {
 		return nil, err
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(output.Data)))
+	defer func() { _, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(output.Data))) }()
 	return append([]byte(nil), unsafe.Slice(output.Data, output.Size)...), nil
 }
 
@@ -146,7 +146,7 @@ func unprotectData(ciphertext []byte, entropy []byte) ([]byte, error) {
 	if err := windows.CryptUnprotectData(&input, nil, &optionalEntropy, 0, nil, windows.CRYPTPROTECT_UI_FORBIDDEN, &output); err != nil {
 		return nil, err
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(output.Data)))
+	defer func() { _, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(output.Data))) }()
 	return append([]byte(nil), unsafe.Slice(output.Data, output.Size)...), nil
 }
 

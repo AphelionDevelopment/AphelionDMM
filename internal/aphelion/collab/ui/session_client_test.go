@@ -931,7 +931,9 @@ func TestSessionClientDiscardConflictResolvesConflictState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "reject", SessionID: "session-1", Type: protocol.ServerOperationRejected, Payload: mustRawJSON(t, protocol.OperationRejectedPayload{OperationID: submission.OperationID, Code: "precondition_failed", Message: "conflict", Revision: snapshot.Revision, MapHash: mapHash})})
+	if err := network.Receive(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "reject", SessionID: "session-1", Type: protocol.ServerOperationRejected, Payload: mustRawJSON(t, protocol.OperationRejectedPayload{OperationID: submission.OperationID, Code: "precondition_failed", Message: "conflict", Revision: snapshot.Revision, MapHash: mapHash})}); err != nil {
+		t.Fatal(err)
+	}
 	if executeErr := <-result; !errors.Is(executeErr, collabclient.ErrOperationRejected) {
 		t.Fatalf("rejected operation error = %v", executeErr)
 	}

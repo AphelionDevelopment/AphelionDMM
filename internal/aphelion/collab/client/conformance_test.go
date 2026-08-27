@@ -115,7 +115,9 @@ func (execution *conformanceNetworkExecutor) Execute(ctx context.Context, operat
 	if err != nil {
 		execution.t.Fatal(err)
 	}
-	execution.network.Receive(serverEnvelope(execution.t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash}))
+	if err := execution.network.Receive(serverEnvelope(execution.t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})); err != nil {
+		execution.t.Fatal(err)
+	}
 	resolved := <-results
 	return resolved.accepted, resolved.err
 }
