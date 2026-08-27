@@ -71,10 +71,33 @@ jobs:
         with:
           workspaces: third_party/sdmmparser/src
 
-      - name: Test Go
+      - if: ${{ !contains(matrix.os, 'ubuntu') }}
+        name: Test Go
         env:
           RUST_TARGET: ${{ matrix.rust-target }}
         run: task test-go
+
+      - if: contains(matrix.os, 'ubuntu')
+        name: Build Parser for Go Tests
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: task build-parser
+
+      - if: contains(matrix.os, 'ubuntu')
+        name: Test Go Commands
+        run: go test ./cmd/... -count=1 -timeout=3m
+
+      - if: contains(matrix.os, 'ubuntu')
+        name: Test Go Aphelion
+        run: go test ./internal/aphelion/... -count=1 -timeout=3m
+
+      - if: contains(matrix.os, 'ubuntu')
+        name: Test Go Application
+        run: go test ./internal/app/... -count=1 -timeout=3m
+
+      - if: contains(matrix.os, 'ubuntu')
+        name: Test Go Foundations
+        run: go test ./internal/dmapi/... ./internal/env/... ./internal/imguiext/... ./internal/platform/... ./internal/req/... ./internal/rsc/... ./internal/util/... ./third_party/... -count=1 -timeout=3m
 
       - name: Test Rust
         env:
@@ -241,6 +264,7 @@ jobs:
             & (Join-Path $stage 'service.ps1') -Action Update -PackageRoot $stage -SkipCloudflare -InstallRoot $installRoot -DataRoot $dataRoot
             Invoke-RestMethod http://127.0.0.1:8080/v1/health/ready
           } catch {
+            Write-Output "::error title=Windows relay lifecycle::$($_.Exception.Message)"
             Get-CimInstance -ClassName Win32_Service -Filter "Name='AphelionDMMRelay'" -ErrorAction SilentlyContinue | Format-List Name, State, StartMode, StartName, PathName, ExitCode
             Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'AphelionDMMRelay' } -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message
             throw

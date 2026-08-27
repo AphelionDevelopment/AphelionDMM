@@ -89,6 +89,11 @@ function Set-RestrictedFileACL {
 	Invoke-NativeCommand -Executable 'icacls.exe' -Arguments @($Path, '/inheritance:r', '/grant:r', '*S-1-5-18:F', '*S-1-5-32-544:F', '*S-1-5-19:R')
 }
 
+function Set-RestrictedExecutableACL {
+	param([Parameter(Mandatory)][string]$Path)
+	Invoke-NativeCommand -Executable 'icacls.exe' -Arguments @($Path, '/inheritance:r', '/grant:r', '*S-1-5-18:F', '*S-1-5-32-544:F', '*S-1-5-19:RX')
+}
+
 function Initialize-Package {
 	Assert-RegularFile -Path $exampleConfig
 	if (Test-Path -LiteralPath $packageRootPath) {
@@ -301,10 +306,10 @@ function Install-RelayService {
 		$arguments += @('-cloudflared', $installedCloudflared, '-tunnel-token-file', $installedToken)
 	}
 	foreach ($path in @($installedRelay, $installedHealthcheck)) {
-		Set-RestrictedFileACL -Path $path
+		Set-RestrictedExecutableACL -Path $path
 	}
 	if (-not $SkipCloudflare) {
-		Set-RestrictedFileACL -Path $installedCloudflared
+		Set-RestrictedExecutableACL -Path $installedCloudflared
 	}
 	& $installedRelay -check-config -config $installedConfig
 	if ($LASTEXITCODE -ne 0) {
