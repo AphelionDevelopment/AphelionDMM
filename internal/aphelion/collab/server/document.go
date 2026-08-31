@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -12,7 +13,10 @@ import (
 	collabtelemetry "sdmm/internal/aphelion/collab/telemetry"
 )
 
-const documentRequestQueueSize = 256
+const (
+	documentRequestQueueSize  = 256
+	appendReconciliationLimit = 5 * time.Second
+)
 
 var ErrDocumentClosed = errors.New("document owner is closed")
 
@@ -160,6 +164,7 @@ func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, 
 			}
 		case result := <-snapshotResults:
 			snapshotInFlight = false
+			snapshotFailed := result.err != nil
 			if result.err != nil {
 				if config.OnSnapshotError != nil {
 					config.OnSnapshotError(result.err)
@@ -167,7 +172,7 @@ func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, 
 			} else {
 				acceptedSinceSnapshot = int(document.Snapshot().Revision - result.revision)
 			}
-			if config.SnapshotOperationThreshold > 0 && acceptedSinceSnapshot >= config.SnapshotOperationThreshold {
+			if !snapshotFailed && config.SnapshotOperationThreshold > 0 && acceptedSinceSnapshot >= config.SnapshotOperationThreshold {
 				scheduleSnapshot()
 			}
 		case request := <-owner.requests:
@@ -232,7 +237,11 @@ func submit(ctx context.Context, document *engine.Document, store SessionStore, 
 		return submitResult{}, err
 	}
 	if exists {
-		return submitResult{operation: prior, document: document, duplicate: true}, nil
+		reconciled, err := reconcileStoredOperation(ctx, document, store, operation, prior, observability)
+		if err != nil {
+			return submitResult{}, err
+		}
+		return submitResult{operation: prior, document: reconciled, duplicate: true}, nil
 	}
 	candidate := document.Clone()
 	accepted, err := candidate.Apply(operation, time.Now().UTC())
@@ -244,10 +253,61 @@ func submit(ctx context.Context, document *engine.Document, store SessionStore, 
 	if observability != nil {
 		storeContext, finishStore = observability.Store(ctx, collabtelemetry.StoreAppend)
 	}
-	if err := store.Append(storeContext, accepted); err != nil {
-		finishStore(err)
-		return submitResult{}, err
+	if appendErr := store.Append(storeContext, accepted); appendErr != nil {
+		finishStore(appendErr)
+		reconciliationContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), appendReconciliationLimit)
+		defer cancel()
+		prior, exists, lookupErr := store.LookupOperation(reconciliationContext, operation.DocumentID, operation.OperationID)
+		if lookupErr != nil {
+			return submitResult{}, errors.Join(appendErr, fmt.Errorf("reconcile append lookup: %w", lookupErr))
+		}
+		if !exists {
+			return submitResult{}, appendErr
+		}
+		reconciled, reconcileErr := reconcileStoredOperation(reconciliationContext, document, store, operation, prior, observability)
+		if reconcileErr != nil {
+			return submitResult{}, errors.Join(appendErr, fmt.Errorf("reconcile append: %w", reconcileErr))
+		}
+		return submitResult{operation: prior, document: reconciled}, nil
 	}
 	finishStore(nil)
 	return submitResult{operation: accepted, document: candidate}, nil
+}
+
+func reconcileStoredOperation(ctx context.Context, document *engine.Document, store SessionStore, operation model.Operation, prior model.AcceptedOperation, observability *collabtelemetry.Telemetry) (*engine.Document, error) {
+	if !reflect.DeepEqual(prior.Operation, operation) {
+		return nil, fmt.Errorf("operation %q conflicts with stored revision %d", operation.OperationID, prior.Revision)
+	}
+	current := document.Snapshot()
+	currentHash, err := current.Hash()
+	if err != nil {
+		return nil, fmt.Errorf("hash in-memory document: %w", err)
+	}
+	storedCurrentHash, found, err := store.RevisionHash(ctx, current.DocumentID, current.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("look up in-memory revision hash: %w", err)
+	}
+	if prior.Revision <= current.Revision && found && storedCurrentHash == currentHash {
+		return document, nil
+	}
+	reconciled, err := loadStoredDocument(ctx, operation.DocumentID, store, observability)
+	if err != nil {
+		return nil, fmt.Errorf("reload stored document: %w", err)
+	}
+	reconciledSnapshot := reconciled.Snapshot()
+	if reconciledSnapshot.Revision < prior.Revision {
+		return nil, fmt.Errorf("reloaded revision %d is behind stored operation revision %d", reconciledSnapshot.Revision, prior.Revision)
+	}
+	reconciledHash, err := reconciledSnapshot.Hash()
+	if err != nil {
+		return nil, fmt.Errorf("hash reloaded document: %w", err)
+	}
+	storedHash, found, err := store.RevisionHash(ctx, operation.DocumentID, reconciledSnapshot.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("look up reloaded revision hash: %w", err)
+	}
+	if !found || storedHash != reconciledHash {
+		return nil, fmt.Errorf("reloaded revision %d hash does not match durable state", reconciledSnapshot.Revision)
+	}
+	return reconciled, nil
 }

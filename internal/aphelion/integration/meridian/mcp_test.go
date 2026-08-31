@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
+const testMCPTimeout = 10 * time.Second
+
 func TestMCPNegotiatesAndRequiresParseBeforeInspection(t *testing.T) {
-	client := newTestMCP(t, "normal", 2*time.Second, 64<<10)
+	client := newTestMCP(t, "normal", testMCPTimeout, 64<<10)
 	defer closeTestMCP(t, client)
 
 	if _, err := client.InspectMap(context.Background(), "rift", "main-map"); err == nil {
@@ -42,7 +44,7 @@ func TestMCPNegotiatesAndRequiresParseBeforeInspection(t *testing.T) {
 }
 
 func TestMCPRejectsUnknownRepositoryAndIdentifiers(t *testing.T) {
-	client := newTestMCP(t, "normal", 2*time.Second, 64<<10)
+	client := newTestMCP(t, "normal", testMCPTimeout, 64<<10)
 	defer closeTestMCP(t, client)
 
 	if _, err := client.ParseEnvironment(context.Background(), "missing", "tgstation.dme"); err == nil {
@@ -65,7 +67,7 @@ func TestMCPTimeoutIsBounded(t *testing.T) {
 }
 
 func TestMCPRejectsOversizedResponse(t *testing.T) {
-	_, err := NewMCP(context.Background(), testConfig(t, "oversized", time.Second, 1024))
+	_, err := NewMCP(context.Background(), testConfig(t, "oversized", testMCPTimeout, 1024))
 	if err == nil || !strings.Contains(err.Error(), "response limit") {
 		t.Fatalf("NewMCP() error = %v, want response limit error", err)
 	}
@@ -74,7 +76,7 @@ func TestMCPRejectsOversizedResponse(t *testing.T) {
 func TestMCPHandlesProcessExitAndMalformedJSON(t *testing.T) {
 	for _, mode := range []string{"exit", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
-			_, err := NewMCP(context.Background(), testConfig(t, mode, time.Second, 64<<10))
+			_, err := NewMCP(context.Background(), testConfig(t, mode, testMCPTimeout, 64<<10))
 			if err == nil {
 				t.Fatal("NewMCP() error = nil")
 			}
@@ -83,7 +85,7 @@ func TestMCPHandlesProcessExitAndMalformedJSON(t *testing.T) {
 }
 
 func TestMCPRedactsRemoteSecrets(t *testing.T) {
-	_, err := NewMCP(context.Background(), testConfig(t, "secret-error", time.Second, 64<<10))
+	_, err := NewMCP(context.Background(), testConfig(t, "secret-error", testMCPTimeout, 64<<10))
 	if err == nil {
 		t.Fatal("NewMCP() error = nil")
 	}

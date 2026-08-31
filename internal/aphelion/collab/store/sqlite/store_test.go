@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,69 @@ func TestStoreSurvivesCloseAndReopen(t *testing.T) {
 	}
 	if len(replay) != 1 || replay[0].OperationID != fixture.First.OperationID {
 		t.Fatalf("replay after reopen = %#v, want operation %q", replay, fixture.First.OperationID)
+	}
+}
+
+func TestExportCheckpointSurvivesRestartAndCompletion(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := collabstore.NewConformanceFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointID, err := model.NewCheckpointID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapHash, err := fixture.Initial.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := model.ExportCheckpoint{
+		CheckpointID: checkpointID, IdempotencyKey: "restart-export", DocumentID: fixture.Initial.DocumentID,
+		SessionID: "session-1", Revision: fixture.Initial.Revision, MapHash: mapHash, RequestedBy: fixture.First.ActorID,
+		CreatedAt: time.Unix(10, 0).UTC(), Status: model.ExportCheckpointPending,
+	}
+	path := filepath.Join(t.TempDir(), "checkpoint-restart.db")
+	value, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.Create(context.Background(), fixture.Initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := value.CreateExportCheckpoint(context.Background(), pending); err != nil || !created {
+		t.Fatalf("CreateExportCheckpoint() created/error = %t/%v", created, err)
+	}
+	if err := value.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := reopened.LookupExportCheckpoint(context.Background(), fixture.Initial.DocumentID, checkpointID)
+	if err != nil || !found || !reflect.DeepEqual(stored, pending) {
+		t.Fatalf("checkpoint after first reopen = %#v/%t/%v", stored, found, err)
+	}
+	completion := model.ExportCheckpointCompletion{
+		Status: model.ExportCheckpointAccepted, ArtifactHash: strings.Repeat("b", 64), Verifier: "meridian-mcp", VerifierVersion: "1.0.0", CompletedAt: time.Unix(20, 0).UTC(),
+	}
+	completed, err := reopened.CompleteExportCheckpoint(context.Background(), fixture.Initial.DocumentID, checkpointID, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopenedAgain, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopenedAgain.Close() })
+	stored, found, err = reopenedAgain.LookupExportCheckpoint(context.Background(), fixture.Initial.DocumentID, checkpointID)
+	if err != nil || !found || !reflect.DeepEqual(stored, completed) {
+		t.Fatalf("completed checkpoint after second reopen = %#v/%t/%v", stored, found, err)
 	}
 }
 

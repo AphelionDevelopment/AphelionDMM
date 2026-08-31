@@ -17,7 +17,9 @@ type App interface {
 
 type editor interface {
 	ActiveLevel() int
+	// APHELION EDIT ADDITION START - COLLABORATION
 	CanChangeMapSize() bool
+	// APHELION EDIT ADDITION END
 
 	Dmm() *dmmap.Dmm
 	CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ int)

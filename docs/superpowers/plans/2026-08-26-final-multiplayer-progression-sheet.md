@@ -1,5 +1,7 @@
 # AphelionDMM Multiplayer Final Progression Sheet
 
+> **Superseded on 2026-08-31:** Current decisions are in `../../verification/multiplayer-implementation-readiness.md`, `../../verification/online-pilot-readiness.md`, and `../../verification/public-hosting-readiness.md`. This sheet is historical and must not be used to infer fresh external-service, public-hosting, or human evidence.
+
 **Status date:** 2026-08-26  
 **Scope:** AphelionDMM collaboration, Meridian integration contracts, local hosted service, and preparation for a private online pilot.  
 **Excluded:** aphelion-content-tools work, public discovery, and multi-replica hosting.

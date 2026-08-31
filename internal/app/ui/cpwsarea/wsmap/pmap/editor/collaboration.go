@@ -1,3 +1,4 @@
+// APHELION EDIT ADDITION START - COLLABORATION
 package editor
 
 import (
@@ -434,3 +435,5 @@ func (e *Editor) reportCollaborationError(message string, err error) {
 	log.Error().Err(err).Msg(message)
 	util.ShowErrorDialog(message + ": " + err.Error())
 }
+
+// APHELION EDIT ADDITION END

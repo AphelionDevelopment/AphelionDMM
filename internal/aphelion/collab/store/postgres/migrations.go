@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	postgresSchemaVersion = 2
+	postgresSchemaVersion = 3
 	migrationLockID       = 0x415048454c494f4e
 )
 
@@ -18,6 +18,9 @@ var initialSchema string
 
 //go:embed schema/002_hosted_registry.sql
 var hostedRegistrySchema string
+
+//go:embed schema/003_export_checkpoints.sql
+var exportCheckpointsSchema string
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	transaction, err := pool.Begin(ctx)
@@ -52,6 +55,14 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 		if _, err := transaction.Exec(ctx, "INSERT INTO collaboration_schema_migrations(version) VALUES(2)"); err != nil {
 			return fmt.Errorf("record hosted registry schema: %w", err)
+		}
+	}
+	if version < 3 {
+		if _, err := transaction.Exec(ctx, exportCheckpointsSchema); err != nil {
+			return fmt.Errorf("apply export checkpoints schema: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, "INSERT INTO collaboration_schema_migrations(version) VALUES(3)"); err != nil {
+			return fmt.Errorf("record export checkpoints schema: %w", err)
 		}
 	}
 	if err := transaction.Commit(ctx); err != nil {

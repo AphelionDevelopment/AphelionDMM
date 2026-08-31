@@ -23,7 +23,7 @@ const (
 
 // Verifier accepts a staged map only through bounded diagnostics and a fixed acceptance gate.
 type Verifier interface {
-	Verify(ctx context.Context, manifest integrationmanifest.Manifest, stagedFile string) (Evidence, error)
+	Verify(ctx context.Context, manifest integrationmanifest.Manifest, artifact StagedArtifact) (Evidence, error)
 }
 
 // AcceptanceRunner invokes one trusted repository-owned PowerShell acceptance entry point.
@@ -119,7 +119,7 @@ func NewAcceptanceVerifier(config VerifierConfig) (*AcceptanceVerifier, error) {
 }
 
 // Verify validates the immutable stage, parses first, then runs map, diagnostic, and build gates.
-func (verifier *AcceptanceVerifier) Verify(ctx context.Context, manifest integrationmanifest.Manifest, stagedFile string) (Evidence, error) {
+func (verifier *AcceptanceVerifier) Verify(ctx context.Context, manifest integrationmanifest.Manifest, artifact StagedArtifact) (Evidence, error) {
 	started := time.Now()
 	if err := manifest.Validate(); err != nil {
 		return Evidence{}, fmt.Errorf("invalid stage manifest: %w", err)
@@ -130,20 +130,52 @@ func (verifier *AcceptanceVerifier) Verify(ctx context.Context, manifest integra
 	if manifest.EnvironmentSHA256 != verifier.environmentSHA256 {
 		return Evidence{}, fmt.Errorf("stage environment hash does not match trusted configuration")
 	}
-	target, ok := verifier.repository.Targets[manifest.MapTargetID]
-	if !ok {
+	if _, ok := verifier.repository.Targets[manifest.MapTargetID]; !ok {
 		return Evidence{}, fmt.Errorf("stage manifest has an unknown map target")
 	}
-	canonicalStage, err := canonicalContainedFile(verifier.stageRoot, stagedFile)
+	manifestHash, err := integrationmanifest.CanonicalSHA256(manifest)
 	if err != nil {
 		return Evidence{}, err
 	}
-	configuredTarget, err := resolveContained(verifier.repository.Root, target)
+	if artifact.ManifestSHA256 != manifestHash {
+		return Evidence{}, fmt.Errorf("staged artifact manifest hash does not match manifest")
+	}
+	canonicalDirectory, err := canonicalContainedDirectory(verifier.stageRoot, artifact.Directory)
 	if err != nil {
 		return Evidence{}, err
 	}
-	if !samePath(canonicalStage, configuredTarget) {
-		return Evidence{}, fmt.Errorf("staged map does not match the configured MCP target")
+	expectedDirectory := filepath.Join(verifier.stageRoot, manifestHash)
+	if !samePath(canonicalDirectory, expectedDirectory) {
+		return Evidence{}, fmt.Errorf("staged artifact directory does not match manifest hash")
+	}
+	canonicalStage, err := canonicalContainedFile(canonicalDirectory, artifact.MapFile)
+	if err != nil {
+		return Evidence{}, err
+	}
+	if !samePath(canonicalStage, filepath.Join(canonicalDirectory, "map.dmm")) {
+		return Evidence{}, fmt.Errorf("staged map does not use the immutable artifact path")
+	}
+	canonicalManifest, err := canonicalContainedFile(canonicalDirectory, artifact.ManifestFile)
+	if err != nil {
+		return Evidence{}, err
+	}
+	if !samePath(canonicalManifest, filepath.Join(canonicalDirectory, "manifest.json")) {
+		return Evidence{}, fmt.Errorf("staged manifest does not use the immutable artifact path")
+	}
+	manifestFile, err := os.Open(canonicalManifest)
+	if err != nil {
+		return Evidence{}, fmt.Errorf("open staged manifest: %w", err)
+	}
+	stagedManifest, decodeErr := integrationmanifest.Decode(manifestFile)
+	closeErr := manifestFile.Close()
+	if decodeErr != nil {
+		return Evidence{}, fmt.Errorf("read staged manifest: %w", decodeErr)
+	}
+	if closeErr != nil {
+		return Evidence{}, fmt.Errorf("close staged manifest: %w", closeErr)
+	}
+	if stagedManifest != manifest {
+		return Evidence{}, fmt.Errorf("staged manifest does not match trusted manifest")
 	}
 	contents, err := os.ReadFile(canonicalStage)
 	if err != nil {
@@ -303,6 +335,18 @@ func canonicalContainedFile(root, path string) (string, error) {
 		return "", fmt.Errorf("staged map is outside the configured stage root")
 	}
 	return filepath.Clean(canonical), nil
+}
+
+func canonicalContainedDirectory(root, path string) (string, error) {
+	canonical, err := canonicalExistingDirectory(path, "staged artifact directory")
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(root, canonical)
+	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) || len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
+		return "", fmt.Errorf("staged artifact directory is outside the configured stage root")
+	}
+	return canonical, nil
 }
 
 func samePath(left, right string) bool {

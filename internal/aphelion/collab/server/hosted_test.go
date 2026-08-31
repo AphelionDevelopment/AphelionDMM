@@ -16,6 +16,44 @@ import (
 	collabstore "sdmm/internal/aphelion/collab/store"
 )
 
+func TestHostedSessionCreationRejectsUnsafeSnapshotDimensions(t *testing.T) {
+	t.Parallel()
+
+	actorID, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := newFakeHostedBackend(map[string]auth.Session{
+		"owner-auth": {
+			Token:       "owner-auth",
+			ActorID:     actorID,
+			Issuer:      "https://issuer.example",
+			Subject:     "owner",
+			DisplayName: "Owner",
+			Role:        auth.RoleViewer,
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	})
+	service := NewService(ServiceConfig{HostedAuth: backend, HostedRegistry: backend})
+	t.Cleanup(func() { _ = service.Shutdown(context.Background()) })
+	testServer := httptest.NewServer(service.Handler())
+	t.Cleanup(testServer.Close)
+
+	snapshot := testSnapshot(t, model.MaxMapDimension+1)
+	body, err := json.Marshal(map[string]any{"snapshot": snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, testServer.URL+"/v1/hosted/sessions", "owner-auth", body)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create hosted session status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if len(backend.sessions) != 0 {
+		t.Fatalf("hosted registry contains %d sessions after rejection", len(backend.sessions))
+	}
+}
+
 func TestHostedLifecycleBindsOIDCIdentityToPersistentInvitation(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
 	ownerActor, err := model.NewActorID()

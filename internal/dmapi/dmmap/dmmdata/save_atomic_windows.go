@@ -1,5 +1,6 @@
 //go:build windows
 
+// APHELION EDIT ADDITION START - COLLABORATION
 package dmmdata
 
 import "golang.org/x/sys/windows"
@@ -15,3 +16,5 @@ func replaceFile(source string, target string) error {
 	}
 	return windows.MoveFileEx(sourcePath, targetPath, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
+
+// APHELION EDIT ADDITION END

@@ -55,6 +55,7 @@ func (t *ToolAdd) onMove(coord util.Point) {
 func (t *ToolAdd) onStop(util.Point) {
 	if len(t.editedTiles) != 0 {
 		t.editedTiles = make(map[util.Point]bool, len(t.editedTiles))
+		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: go ed.CommitChanges("Add Atoms")
 		ed.CommitOperation("Add Atoms")
 	}
 }

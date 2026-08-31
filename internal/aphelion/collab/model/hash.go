@@ -12,7 +12,7 @@ import (
 const canonicalMapDomain = "apheliondmm.map.v1"
 
 func (snapshot Snapshot) Hash() (string, error) {
-	if err := snapshot.validateForHash(); err != nil {
+	if err := snapshot.Validate(); err != nil {
 		return "", err
 	}
 
@@ -70,7 +70,8 @@ func ValidateSHA256(name string, value string) error {
 	return nil
 }
 
-func (snapshot Snapshot) validateForHash() error {
+// Validate checks whether a snapshot is safe and canonical enough to hash or apply.
+func (snapshot Snapshot) Validate() error {
 	if snapshot.ProtocolVersion != ProtocolVersion {
 		return fmt.Errorf("protocol version is %d, want %d", snapshot.ProtocolVersion, ProtocolVersion)
 	}
@@ -83,8 +84,8 @@ func (snapshot Snapshot) validateForHash() error {
 	if err := ValidateSHA256("environment hash", snapshot.EnvironmentHash); err != nil {
 		return err
 	}
-	if snapshot.MaxX <= 0 || snapshot.MaxY <= 0 || snapshot.MaxZ <= 0 {
-		return fmt.Errorf("dimensions must be positive: got (%d,%d,%d)", snapshot.MaxX, snapshot.MaxY, snapshot.MaxZ)
+	if _, err := snapshot.CellCount(); err != nil {
+		return err
 	}
 
 	coordinates := make(map[Coord]struct{}, len(snapshot.Tiles))

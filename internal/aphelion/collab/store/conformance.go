@@ -77,6 +77,63 @@ func VerifyConformance(ctx context.Context, factory ConformanceFactory, fixture 
 	if err := value.Create(ctx, fixture.Other); err != nil {
 		return fmt.Errorf("create other: %w", err)
 	}
+	checkpointID, err := model.NewCheckpointID()
+	if err != nil {
+		return fmt.Errorf("create checkpoint id: %w", err)
+	}
+	initialHash, err := fixture.Initial.Hash()
+	if err != nil {
+		return err
+	}
+	pendingCheckpoint := model.ExportCheckpoint{
+		CheckpointID:   checkpointID,
+		IdempotencyKey: "conformance-export-1",
+		DocumentID:     fixture.Initial.DocumentID,
+		SessionID:      "conformance-session",
+		Revision:       fixture.Initial.Revision,
+		MapHash:        initialHash,
+		RequestedBy:    fixture.First.ActorID,
+		CreatedAt:      time.Unix(3, 0).UTC(),
+		Status:         model.ExportCheckpointPending,
+	}
+	createdCheckpoint, created, err := value.CreateExportCheckpoint(ctx, pendingCheckpoint)
+	if err != nil || !created || !reflect.DeepEqual(createdCheckpoint, pendingCheckpoint) {
+		return fmt.Errorf("create export checkpoint = %#v/%t/%v", createdCheckpoint, created, err)
+	}
+	retry := pendingCheckpoint
+	retry.CheckpointID, err = model.NewCheckpointID()
+	if err != nil {
+		return err
+	}
+	retry.CreatedAt = time.Unix(4, 0).UTC()
+	retriedCheckpoint, created, err := value.CreateExportCheckpoint(ctx, retry)
+	if err != nil || created || !reflect.DeepEqual(retriedCheckpoint, pendingCheckpoint) {
+		return fmt.Errorf("retry export checkpoint = %#v/%t/%v", retriedCheckpoint, created, err)
+	}
+	conflict := pendingCheckpoint
+	conflict.Revision++
+	if _, _, err := value.CreateExportCheckpoint(ctx, conflict); !errors.Is(err, ErrCheckpointConflict) {
+		return fmt.Errorf("checkpoint idempotency conflict error = %v, want %v", err, ErrCheckpointConflict)
+	}
+	lookedUpCheckpoint, found, err := value.LookupExportCheckpoint(ctx, fixture.Initial.DocumentID, checkpointID)
+	if err != nil || !found || !reflect.DeepEqual(lookedUpCheckpoint, pendingCheckpoint) {
+		return fmt.Errorf("lookup export checkpoint = %#v/%t/%v", lookedUpCheckpoint, found, err)
+	}
+	completion := model.ExportCheckpointCompletion{
+		Status:          model.ExportCheckpointAccepted,
+		ArtifactHash:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Verifier:        "conformance-verifier",
+		VerifierVersion: "1.0.0",
+		CompletedAt:     time.Unix(5, 0).UTC(),
+	}
+	completedCheckpoint, err := value.CompleteExportCheckpoint(ctx, fixture.Initial.DocumentID, checkpointID, completion)
+	if err != nil || completedCheckpoint.Status != model.ExportCheckpointAccepted {
+		return fmt.Errorf("complete export checkpoint = %#v/%v", completedCheckpoint, err)
+	}
+	repeatedCheckpoint, err := value.CompleteExportCheckpoint(ctx, fixture.Initial.DocumentID, checkpointID, completion)
+	if err != nil || !reflect.DeepEqual(repeatedCheckpoint, completedCheckpoint) {
+		return fmt.Errorf("repeat export checkpoint completion = %#v/%v", repeatedCheckpoint, err)
+	}
 
 	loaded, operations, err := value.Load(ctx, fixture.Initial.DocumentID)
 	if err != nil {
@@ -137,10 +194,6 @@ func VerifyConformance(ctx context.Context, factory ConformanceFactory, fixture 
 	}
 	if _, found, err := value.LookupOperation(ctx, fixture.Initial.DocumentID, fixture.First.OperationID); err != nil || !found {
 		return fmt.Errorf("compaction discarded duplicate lookup history")
-	}
-	initialHash, err := fixture.Initial.Hash()
-	if err != nil {
-		return err
 	}
 	if retainedHash, found, err := value.RevisionHash(ctx, fixture.Initial.DocumentID, fixture.Initial.Revision); err != nil || !found || retainedHash != initialHash {
 		return fmt.Errorf("compaction discarded initial revision hash")

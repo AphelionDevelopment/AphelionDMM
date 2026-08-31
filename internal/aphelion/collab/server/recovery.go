@@ -58,10 +58,18 @@ func RecoverDocumentWithConfig(ctx context.Context, documentID model.DocumentID,
 	if store == nil {
 		return nil, fmt.Errorf("recover document: store is nil")
 	}
+	document, err := loadStoredDocument(ctx, documentID, store, config.Telemetry)
+	if err != nil {
+		return nil, err
+	}
+	return startDocument(ctx, document, store, config), nil
+}
+
+func loadStoredDocument(ctx context.Context, documentID model.DocumentID, store SessionStore, observability *collabtelemetry.Telemetry) (*engine.Document, error) {
 	loadContext := ctx
 	finishLoad := func(error) {}
-	if config.Telemetry != nil {
-		loadContext, finishLoad = config.Telemetry.Store(ctx, collabtelemetry.StoreLoad)
+	if observability != nil {
+		loadContext, finishLoad = observability.Store(ctx, collabtelemetry.StoreLoad)
 	}
 	snapshot, replay, err := store.Load(loadContext, documentID)
 	if err != nil {
@@ -70,8 +78,8 @@ func RecoverDocumentWithConfig(ctx context.Context, documentID model.DocumentID,
 	}
 	finishLoad(nil)
 	finishReplay := func(error) {}
-	if config.Telemetry != nil {
-		_, finishReplay = config.Telemetry.Replay(ctx, len(replay))
+	if observability != nil {
+		_, finishReplay = observability.Replay(ctx, len(replay))
 	}
 	document, err := engine.NewDocument(snapshot)
 	if err != nil {
@@ -91,5 +99,5 @@ func RecoverDocumentWithConfig(ctx context.Context, documentID model.DocumentID,
 		}
 	}
 	finishReplay(nil)
-	return startDocument(ctx, document, store, config), nil
+	return document, nil
 }

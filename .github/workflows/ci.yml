@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Dependencies
         run: |
@@ -15,13 +15,13 @@ jobs:
           sudo apt install xorg-dev libgtk-3-dev
 
       - name: Setup Golang
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
 
@@ -41,7 +41,7 @@ jobs:
     name: Build - ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - if: contains(matrix.os, 'ubuntu')
         name: Dependencies (Linux)
@@ -51,14 +51,14 @@ jobs:
           sudo apt install xorg-dev libgtk-3-dev
 
       - name: Setup Golang
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           architecture: x64
           cache: true
 
       - name: Setup Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +67,7 @@ jobs:
         run: rustup toolchain install "${{ matrix.rust-target }}" --profile minimal --component rustfmt --component clippy
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: third_party/sdmmparser/src
 
@@ -89,7 +89,7 @@ jobs:
         run: task build
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ runner.os }}
           path: dst/*
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Dependencies
         run: |
@@ -109,7 +109,7 @@ jobs:
           sudo apt install xorg-dev libgtk-3-dev
 
       - name: Setup Golang
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           architecture: x64
@@ -150,7 +150,7 @@ jobs:
       APHELION_POSTGRES_TEST_DSN: postgres://aphelion_ci:aphelion_ci_only@127.0.0.1:5432/aphelion_ci?sslmode=disable
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Dependencies
         run: |
@@ -159,7 +159,7 @@ jobs:
           sudo apt install xorg-dev libgtk-3-dev postgresql-client
 
       - name: Setup Golang
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           architecture: x64
@@ -212,10 +212,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Golang
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           architecture: x64
@@ -234,7 +234,7 @@ jobs:
             -PlanOnly
 
       - name: Upload integration availability evidence
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: toolset-integration-availability
           path: ${{ runner.temp }}/aphelion-stack-plan.json
@@ -243,7 +243,12 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - lint-source-code
+      - build
+      - collaboration-resilience
+      - hosted-collaboration-gates
+      - toolset-integration-contracts
     if: startsWith(github.ref, 'refs/tags/v') # if tag starts with "v"
     permissions:
       attestations: write
@@ -251,16 +256,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Release Files
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dst/
 
@@ -275,7 +280,7 @@ jobs:
             dst/archive/**
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

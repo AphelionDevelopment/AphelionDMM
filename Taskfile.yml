@@ -69,8 +69,19 @@ tasks:
       - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo fmt --all -- --check
       - RUSTUP_TOOLCHAIN={{.RUSTUP_TOOLCHAIN}} cargo clippy --all-targets --locked -- -D warnings
 
+  lint:
+    cmds:
+      - golangci-lint run
+
+  verify-contracts:
+    cmds:
+      - go test ./internal/aphelion/collab/protocol -run '^Test(Contracts|OpenAPI)' -count=1
+      - go test ./internal/aphelion/integration/manifest ./internal/aphelion/buildcheck -count=1
+
   verify:
     cmds:
+      - task: lint
+      - task: verify-contracts
       - task: test-go
       - task: test-rust
       - task: build

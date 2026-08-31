@@ -241,8 +241,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExportCheckpoint' }
+        '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-        '501': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /v1/health/live:
     get:
       summary: Check process liveness
@@ -452,26 +455,37 @@ components:
         document_id: { type: string, format: uuid }
         revision: { type: integer, minimum: 0 }
         environment_hash: { $ref: '#/components/schemas/SHA256' }
-        max_x: { type: integer, minimum: 1 }
-        max_y: { type: integer, minimum: 1 }
-        max_z: { type: integer, minimum: 1 }
+        max_x: { type: integer, minimum: 1, maximum: 4096 }
+        max_y: { type: integer, minimum: 1, maximum: 4096 }
+        max_z: { type: integer, minimum: 1, maximum: 4096 }
         tiles: { type: array, maxItems: 16777216, items: { type: object } }
     ExportRequest:
       type: object
       additionalProperties: false
-      required: [revision, map_hash]
+      required: [revision, map_hash, idempotency_key]
       properties:
         revision: { type: integer, minimum: 0 }
         map_hash: { $ref: '#/components/schemas/SHA256' }
+        idempotency_key: { type: string, minLength: 1, maxLength: 128 }
     ExportCheckpoint:
       type: object
       additionalProperties: false
-      required: [checkpoint_id, revision, map_hash, status]
+      required: [checkpoint_id, idempotency_key, document_id, session_id, revision, map_hash, requested_by, created_at, status]
       properties:
-        checkpoint_id: { type: string, minLength: 1, maxLength: 128 }
+        checkpoint_id: { type: string, format: uuid }
+        idempotency_key: { type: string, minLength: 1, maxLength: 128 }
+        document_id: { type: string, format: uuid }
+        session_id: { type: string, minLength: 1, maxLength: 128 }
         revision: { type: integer, minimum: 0 }
         map_hash: { $ref: '#/components/schemas/SHA256' }
-        status: { type: string, enum: [accepted, complete, failed] }
+        requested_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        status: { type: string, enum: [pending, accepted, rejected] }
+        artifact_hash: { $ref: '#/components/schemas/SHA256' }
+        verifier: { type: string, minLength: 1, maxLength: 128 }
+        verifier_version: { type: string, minLength: 1, maxLength: 128 }
+        diagnostic_code: { type: string, minLength: 1, maxLength: 128, pattern: '^[a-z0-9_]+$' }
+        completed_at: { type: string, format: date-time }
     Error:
       type: object
       additionalProperties: false

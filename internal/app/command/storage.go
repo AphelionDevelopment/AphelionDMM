@@ -66,6 +66,27 @@ func (s *Storage) Push(command Command) {
 	}
 }
 
+/* APHELION EDIT REMOVAL START - COLLABORATION
+func (s *Storage) Undo() {
+	s.UndoV(s.currentStackId)
+}
+
+func (s *Storage) UndoV(id string) {
+	if stack, ok := s.commandStacks[id]; ok {
+		logStackAction(stack, "undo")
+
+		if len(stack.undo) == 0 {
+			log.Print("unable to undo empty stack")
+			return
+		}
+
+		s.undo(stack)
+	} else {
+		logNoStackAvailable("undo")
+	}
+}
+APHELION EDIT REMOVAL END */
+// APHELION EDIT ADDITION START - COLLABORATION
 func (s *Storage) Undo() {
 	s.UndoAsyncV(s.currentStackId, nil)
 }
@@ -100,6 +121,8 @@ func (s *Storage) UndoAsyncV(id string, complete func(error)) bool {
 	return true
 }
 
+// APHELION EDIT ADDITION END
+
 func (s *Storage) undo(stack *commandStack) {
 	var command Command
 	command, stack.undo = stack.undo[len(stack.undo)-1], stack.undo[:len(stack.undo)-1]
@@ -107,6 +130,27 @@ func (s *Storage) undo(stack *commandStack) {
 	stack.balance--
 }
 
+/* APHELION EDIT REMOVAL START - COLLABORATION
+func (s *Storage) Redo() {
+	s.RedoV(s.currentStackId)
+}
+
+func (s *Storage) RedoV(id string) {
+	if stack, ok := s.commandStacks[id]; ok {
+		logStackAction(stack, "redo")
+
+		if len(stack.redo) == 0 {
+			log.Print("unable to read empty stack")
+			return
+		}
+
+		s.redo(stack)
+	} else {
+		logNoStackAvailable("redo")
+	}
+}
+APHELION EDIT REMOVAL END */
+// APHELION EDIT ADDITION START - COLLABORATION
 func (s *Storage) Redo() {
 	s.RedoAsyncV(s.currentStackId, nil)
 }
@@ -141,6 +185,8 @@ func (s *Storage) RedoAsyncV(id string, complete func(error)) bool {
 	return true
 }
 
+// APHELION EDIT ADDITION END
+
 func (s *Storage) redo(stack *commandStack) {
 	var command Command
 	command, stack.redo = stack.redo[len(stack.redo)-1], stack.redo[:len(stack.redo)-1]
@@ -154,6 +200,7 @@ func (s *Storage) HasUndo() bool {
 
 func (s *Storage) HasUndoV(id string) bool {
 	if stack, ok := s.commandStacks[id]; ok {
+		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: return len(stack.undo) > 0
 		return !stack.busy && len(stack.undo) > 0
 	}
 	return false
@@ -165,6 +212,7 @@ func (s *Storage) HasRedo() bool {
 
 func (s *Storage) HasRedoV(id string) bool {
 	if stack, ok := s.commandStacks[id]; ok {
+		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: return len(stack.redo) > 0
 		return !stack.busy && len(stack.redo) > 0
 	}
 	return false
@@ -198,12 +246,14 @@ func (s *Storage) Balance(id string) {
 
 	if stack, ok := s.commandStacks[id]; ok {
 		logStackAction(stack, "balance")
+		// APHELION EDIT ADDITION START - COLLABORATION
 		for _, command := range append(stack.undo, stack.redo...) {
 			if command.undoAsync != nil || command.redoAsync != nil {
 				log.Print("skip balancing asynchronous command stack")
 				return
 			}
 		}
+		// APHELION EDIT ADDITION END
 
 		for {
 			if stack.balance == 0 {
@@ -230,7 +280,9 @@ type commandStack struct {
 	balance int
 	undo    []Command
 	redo    []Command
-	busy    bool
+	// APHELION EDIT ADDITION START - COLLABORATION
+	busy bool
+	// APHELION EDIT ADDITION END
 
 	// Field stores a command id at the moment when the stack was forcefully balanced.
 	balanceCommandId uint64

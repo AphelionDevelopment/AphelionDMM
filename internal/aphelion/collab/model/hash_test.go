@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,49 @@ func TestSnapshotHashIsCanonical(t *testing.T) {
 		}
 		if repeated != want {
 			t.Fatalf("repeated hash changed: got %q, want %q", repeated, want)
+		}
+	}
+}
+
+func TestUUIDv7GenerationIsCanonicalUniqueAndMonotonic(t *testing.T) {
+	const count = 10_000
+	seen := make(map[DocumentID]struct{}, count)
+	var previous DocumentID
+	for range count {
+		id, err := NewDocumentID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+			t.Fatalf("generated ID %q is not canonical UUID text", id)
+		}
+		if id[14] != '7' {
+			t.Fatalf("generated ID %q has version nibble %q", id, id[14])
+		}
+		if !strings.ContainsRune("89ab", rune(id[19])) {
+			t.Fatalf("generated ID %q has RFC variant nibble %q", id, id[19])
+		}
+		if err := id.Validate(); err != nil {
+			t.Fatalf("generated ID %q is invalid: %v", id, err)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			t.Fatalf("generated duplicate ID %q", id)
+		}
+		seen[id] = struct{}{}
+		if previous != "" && id < previous {
+			t.Fatalf("generated IDs decreased lexically: %q then %q", previous, id)
+		}
+		previous = id
+	}
+}
+
+func TestUUIDv7ValidationRejectsWrongVersionAndVariant(t *testing.T) {
+	for _, id := range []DocumentID{
+		"01890f3e-7b5c-6abc-8def-0123456789ab",
+		"01890f3e-7b5c-7abc-7def-0123456789ab",
+	} {
+		if err := id.Validate(); err == nil {
+			t.Fatalf("DocumentID(%q).Validate() error = nil", id)
 		}
 	}
 }
@@ -181,6 +225,35 @@ func TestSnapshotHashRejectsInvalidState(t *testing.T) {
 			_, err := snapshot.Hash()
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("Hash() error = %v, want error containing %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestSnapshotValidateRejectsUnsafeDimensions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		maxX    int
+		maxY    int
+		maxZ    int
+		wantErr string
+	}{
+		{name: "dimension limit", maxX: 4097, maxY: 1, maxZ: 1, wantErr: "maximum"},
+		{name: "cell limit", maxX: 4096, maxY: 4096, maxZ: 2, wantErr: "cell count"},
+		{name: "integer overflow", maxX: math.MaxInt, maxY: 2, maxZ: 1, wantErr: "maximum"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			snapshot := fixtureSnapshot()
+			snapshot.MaxX = test.maxX
+			snapshot.MaxY = test.maxY
+			snapshot.MaxZ = test.maxZ
+			if err := snapshot.Validate(); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Validate() error = %v, want error containing %q", err, test.wantErr)
 			}
 		})
 	}

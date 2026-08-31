@@ -11,22 +11,26 @@ import (
 )
 
 type MemoryStore struct {
-	mutex      sync.RWMutex
-	closed     bool
-	sessions   map[model.DocumentID]model.Snapshot
-	operations map[model.DocumentID][]model.AcceptedOperation
-	accepted   map[model.DocumentID]map[model.OperationID]model.AcceptedOperation
-	documents  map[model.DocumentID]*engine.Document
-	hashes     map[model.DocumentID]map[model.Revision]string
+	mutex          sync.RWMutex
+	closed         bool
+	sessions       map[model.DocumentID]model.Snapshot
+	operations     map[model.DocumentID][]model.AcceptedOperation
+	accepted       map[model.DocumentID]map[model.OperationID]model.AcceptedOperation
+	documents      map[model.DocumentID]*engine.Document
+	hashes         map[model.DocumentID]map[model.Revision]string
+	checkpoints    map[model.DocumentID]map[model.CheckpointID]model.ExportCheckpoint
+	checkpointKeys map[model.DocumentID]map[string]model.CheckpointID
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		sessions:   make(map[model.DocumentID]model.Snapshot),
-		operations: make(map[model.DocumentID][]model.AcceptedOperation),
-		accepted:   make(map[model.DocumentID]map[model.OperationID]model.AcceptedOperation),
-		documents:  make(map[model.DocumentID]*engine.Document),
-		hashes:     make(map[model.DocumentID]map[model.Revision]string),
+		sessions:       make(map[model.DocumentID]model.Snapshot),
+		operations:     make(map[model.DocumentID][]model.AcceptedOperation),
+		accepted:       make(map[model.DocumentID]map[model.OperationID]model.AcceptedOperation),
+		documents:      make(map[model.DocumentID]*engine.Document),
+		hashes:         make(map[model.DocumentID]map[model.Revision]string),
+		checkpoints:    make(map[model.DocumentID]map[model.CheckpointID]model.ExportCheckpoint),
+		checkpointKeys: make(map[model.DocumentID]map[string]model.CheckpointID),
 	}
 }
 
@@ -55,6 +59,8 @@ func (store *MemoryStore) Create(ctx context.Context, snapshot model.Snapshot) e
 	store.accepted[snapshot.DocumentID] = make(map[model.OperationID]model.AcceptedOperation)
 	store.documents[snapshot.DocumentID] = document
 	store.hashes[snapshot.DocumentID] = map[model.Revision]string{snapshot.Revision: mapHash}
+	store.checkpoints[snapshot.DocumentID] = make(map[model.CheckpointID]model.ExportCheckpoint)
+	store.checkpointKeys[snapshot.DocumentID] = make(map[string]model.CheckpointID)
 	return nil
 }
 
@@ -191,6 +197,96 @@ func (store *MemoryStore) LookupOperation(ctx context.Context, documentID model.
 	}
 	accepted, exists := operations[operationID]
 	return model.CloneAcceptedOperation(accepted), exists, nil
+}
+
+func (store *MemoryStore) CreateExportCheckpoint(ctx context.Context, checkpoint model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if err := checkpoint.Validate(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if checkpoint.Status != model.ExportCheckpointPending {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("new export checkpoint must be pending")
+	}
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, ErrStoreClosed
+	}
+	if _, exists := store.sessions[checkpoint.DocumentID]; !exists {
+		return model.ExportCheckpoint{}, false, ErrSessionMissing
+	}
+	if checkpointID, exists := store.checkpointKeys[checkpoint.DocumentID][checkpoint.IdempotencyKey]; exists {
+		prior := store.checkpoints[checkpoint.DocumentID][checkpointID]
+		if SameCheckpointRequest(prior, checkpoint) {
+			return model.CloneExportCheckpoint(prior), false, nil
+		}
+		return model.ExportCheckpoint{}, false, ErrCheckpointConflict
+	}
+	hash, exists := store.hashes[checkpoint.DocumentID][checkpoint.Revision]
+	if !exists || hash != checkpoint.MapHash {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("checkpoint revision/hash is not retained")
+	}
+	if prior, exists := store.checkpoints[checkpoint.DocumentID][checkpoint.CheckpointID]; exists {
+		if SameCheckpointRequest(prior, checkpoint) {
+			return model.CloneExportCheckpoint(prior), false, nil
+		}
+		return model.ExportCheckpoint{}, false, ErrCheckpointConflict
+	}
+	cloned := model.CloneExportCheckpoint(checkpoint)
+	store.checkpoints[checkpoint.DocumentID][checkpoint.CheckpointID] = cloned
+	store.checkpointKeys[checkpoint.DocumentID][checkpoint.IdempotencyKey] = checkpoint.CheckpointID
+	return model.CloneExportCheckpoint(cloned), true, nil
+}
+
+func (store *MemoryStore) LookupExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, ErrStoreClosed
+	}
+	checkpoints, exists := store.checkpoints[documentID]
+	if !exists {
+		return model.ExportCheckpoint{}, false, ErrSessionMissing
+	}
+	checkpoint, exists := checkpoints[checkpointID]
+	return model.CloneExportCheckpoint(checkpoint), exists, nil
+}
+
+func (store *MemoryStore) CompleteExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID, completion model.ExportCheckpointCompletion) (model.ExportCheckpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return model.ExportCheckpoint{}, err
+	}
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, ErrStoreClosed
+	}
+	checkpoints, exists := store.checkpoints[documentID]
+	if !exists {
+		return model.ExportCheckpoint{}, ErrSessionMissing
+	}
+	checkpoint, exists := checkpoints[checkpointID]
+	if !exists {
+		return model.ExportCheckpoint{}, ErrCheckpointMissing
+	}
+	completed, err := checkpoint.Complete(completion)
+	if err != nil {
+		if checkpoint.Status != model.ExportCheckpointPending {
+			expected := model.CloneExportCheckpoint(checkpoint)
+			if CheckpointMatchesCompletion(expected, completion) {
+				return expected, nil
+			}
+			return model.ExportCheckpoint{}, ErrCheckpointTerminal
+		}
+		return model.ExportCheckpoint{}, err
+	}
+	checkpoints[checkpointID] = model.CloneExportCheckpoint(completed)
+	return model.CloneExportCheckpoint(completed), nil
 }
 
 func (store *MemoryStore) Close() error {

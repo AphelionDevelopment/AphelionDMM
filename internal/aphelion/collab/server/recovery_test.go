@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,6 +144,10 @@ func TestInterruptedSnapshotDoesNotLoseAcknowledgedOperation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("interrupted snapshot error was not reported")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if attempts := value.attempts.Load(); attempts != 1 {
+		t.Fatalf("snapshot attempts = %d, want one attempt until another trigger", attempts)
 	}
 	if err := owner.Close(context.Background()); err != nil {
 		t.Fatal(err)
@@ -300,15 +305,26 @@ func (store *recoveryStore) LookupOperation(context.Context, model.DocumentID, m
 func (store *recoveryStore) Load(context.Context, model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
 	return model.CloneSnapshot(store.snapshot), append([]model.AcceptedOperation(nil), store.operations...), nil
 }
+func (store *recoveryStore) CreateExportCheckpoint(context.Context, model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
+	return model.ExportCheckpoint{}, false, errors.New("export checkpoints are unavailable in recovery fixture")
+}
+func (store *recoveryStore) LookupExportCheckpoint(context.Context, model.DocumentID, model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	return model.ExportCheckpoint{}, false, errors.New("export checkpoints are unavailable in recovery fixture")
+}
+func (store *recoveryStore) CompleteExportCheckpoint(context.Context, model.DocumentID, model.CheckpointID, model.ExportCheckpointCompletion) (model.ExportCheckpoint, error) {
+	return model.ExportCheckpoint{}, errors.New("export checkpoints are unavailable in recovery fixture")
+}
 func (store *recoveryStore) Close() error { return nil }
 
 var errSnapshotInterrupted = errors.New("snapshot interrupted")
 
 type interruptedSnapshotStore struct {
 	*MemoryStore
+	attempts atomic.Uint64
 }
 
 func (store *interruptedSnapshotStore) SaveSnapshot(context.Context, model.Snapshot) error {
+	store.attempts.Add(1)
 	return errSnapshotInterrupted
 }
 

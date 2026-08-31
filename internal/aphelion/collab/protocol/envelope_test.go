@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -275,6 +276,101 @@ func TestContractsAreValidPinnedYAMLDocuments(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenAPISnapshotLimitsMatchModel(t *testing.T) {
+	t.Parallel()
+
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(readContract(t, "openapi.yaml")), &document); err != nil {
+		t.Fatalf("decode openapi.yaml: %v", err)
+	}
+	components := requireYAMLMap(t, document, "components")
+	schemas := requireYAMLMap(t, components, "schemas")
+	snapshot := requireYAMLMap(t, schemas, "Snapshot")
+	properties := requireYAMLMap(t, snapshot, "properties")
+	for _, name := range []string{"max_x", "max_y", "max_z"} {
+		dimension := requireYAMLMap(t, properties, name)
+		if got := requireYAMLInt(t, dimension, "maximum"); got != model.MaxMapDimension {
+			t.Errorf("Snapshot.%s maximum = %d, want %d", name, got, model.MaxMapDimension)
+		}
+	}
+	tiles := requireYAMLMap(t, properties, "tiles")
+	if got := requireYAMLInt(t, tiles, "maxItems"); got != model.MaxMapCells {
+		t.Errorf("Snapshot.tiles maxItems = %d, want %d", got, model.MaxMapCells)
+	}
+}
+
+func TestOpenAPIExportCheckpointContractMatchesHandler(t *testing.T) {
+	t.Parallel()
+
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(readContract(t, "openapi.yaml")), &document); err != nil {
+		t.Fatalf("decode openapi.yaml: %v", err)
+	}
+	paths := requireYAMLMap(t, document, "paths")
+	exportPath := requireYAMLMap(t, paths, "/v1/sessions/{session_id}/exports")
+	post := requireYAMLMap(t, exportPath, "post")
+	responses := requireYAMLMap(t, post, "responses")
+	for _, status := range []string{"202", "400", "403", "409", "413", "503"} {
+		if _, exists := responses[status]; !exists {
+			t.Errorf("export responses omit HTTP %s", status)
+		}
+	}
+	if _, exists := responses["501"]; exists {
+		t.Error("export responses still declare HTTP 501")
+	}
+
+	components := requireYAMLMap(t, document, "components")
+	schemas := requireYAMLMap(t, components, "schemas")
+	requestSchema := requireYAMLMap(t, schemas, "ExportRequest")
+	required := requireYAMLStrings(t, requestSchema, "required")
+	for _, name := range []string{"revision", "map_hash", "idempotency_key"} {
+		if !slices.Contains(required, name) {
+			t.Errorf("ExportRequest required fields omit %q", name)
+		}
+	}
+	checkpointSchema := requireYAMLMap(t, schemas, "ExportCheckpoint")
+	checkpointProperties := requireYAMLMap(t, checkpointSchema, "properties")
+	status := requireYAMLMap(t, checkpointProperties, "status")
+	if got := requireYAMLStrings(t, status, "enum"); !slices.Equal(got, []string{"pending", "accepted", "rejected"}) {
+		t.Errorf("ExportCheckpoint status enum = %v", got)
+	}
+}
+
+func requireYAMLMap(t *testing.T, values map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := values[key].(map[string]any)
+	if !ok {
+		t.Fatalf("OpenAPI %s is %T, want object", key, values[key])
+	}
+	return value
+}
+
+func requireYAMLInt(t *testing.T, values map[string]any, key string) int {
+	t.Helper()
+	value, ok := values[key].(int)
+	if !ok {
+		t.Fatalf("OpenAPI %s is %T, want integer", key, values[key])
+	}
+	return value
+}
+
+func requireYAMLStrings(t *testing.T, values map[string]any, key string) []string {
+	t.Helper()
+	raw, ok := values[key].([]any)
+	if !ok {
+		t.Fatalf("OpenAPI %s is %T, want array", key, values[key])
+	}
+	result := make([]string, len(raw))
+	for index, value := range raw {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("OpenAPI %s[%d] is %T, want string", key, index, value)
+		}
+		result[index] = text
+	}
+	return result
 }
 
 func readFixture(t *testing.T, name string) []byte {

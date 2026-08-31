@@ -94,6 +94,7 @@ func (t *ToolFill) onStop(util.Point) {
 			}
 		}
 
+		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: go ed.CommitChanges("Fill Atoms")
 		ed.CommitOperation("Fill Atoms")
 	}
 

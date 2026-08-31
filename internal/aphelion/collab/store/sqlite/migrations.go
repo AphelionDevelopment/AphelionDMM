@@ -7,13 +7,16 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 //go:embed schema/001_initial.sql
 var initialSchema string
 
 //go:embed schema/002_revision_hashes.sql
 var revisionHashesSchema string
+
+//go:embed schema/003_export_checkpoints.sql
+var exportCheckpointsSchema string
 
 func migrate(ctx context.Context, database *sql.DB) error {
 	var version int
@@ -36,6 +39,11 @@ func migrate(ctx context.Context, database *sql.DB) error {
 	if version < 2 {
 		if _, err := transaction.ExecContext(ctx, revisionHashesSchema); err != nil {
 			return fmt.Errorf("apply revision hashes schema: %w", err)
+		}
+	}
+	if version < 3 {
+		if _, err := transaction.ExecContext(ctx, exportCheckpointsSchema); err != nil {
+			return fmt.Errorf("apply export checkpoints schema: %w", err)
 		}
 	}
 	if err := transaction.Commit(); err != nil {

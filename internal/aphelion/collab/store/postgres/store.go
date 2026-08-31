@@ -301,6 +301,131 @@ func (store *Store) LookupOperation(ctx context.Context, documentID model.Docume
 	return model.AcceptedOperation{}, false, nil
 }
 
+func (store *Store) CreateExportCheckpoint(ctx context.Context, checkpoint model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, collabstore.ErrStoreClosed
+	}
+	if err := checkpoint.Validate(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if checkpoint.Status != model.ExportCheckpointPending {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("new export checkpoint must be pending")
+	}
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("begin PostgreSQL export checkpoint: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(context.Background()) }()
+	var present int
+	if err := transaction.QueryRow(ctx, `SELECT 1 FROM collaboration_documents WHERE document_id = $1 FOR UPDATE`, checkpoint.DocumentID).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, collabstore.ErrSessionMissing
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("lock PostgreSQL checkpoint document: %w", err)
+	}
+	prior, found, err := lookupExportCheckpointByKey(ctx, transaction, checkpoint.DocumentID, checkpoint.IdempotencyKey)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if found {
+		if collabstore.SameCheckpointRequest(prior, checkpoint) {
+			return prior, false, nil
+		}
+		return model.ExportCheckpoint{}, false, collabstore.ErrCheckpointConflict
+	}
+	prior, found, err = lookupExportCheckpoint(ctx, transaction, checkpoint.DocumentID, checkpoint.CheckpointID)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if found {
+		if collabstore.SameCheckpointRequest(prior, checkpoint) {
+			return prior, false, nil
+		}
+		return model.ExportCheckpoint{}, false, collabstore.ErrCheckpointConflict
+	}
+	var retainedHash string
+	if err := transaction.QueryRow(ctx, `SELECT map_hash FROM collaboration_revision_hashes WHERE document_id = $1 AND revision = $2`, checkpoint.DocumentID, checkpoint.Revision).Scan(&retainedHash); errors.Is(err, pgx.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("checkpoint revision/hash is not retained")
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("query PostgreSQL checkpoint revision hash: %w", err)
+	}
+	if retainedHash != checkpoint.MapHash {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("checkpoint revision/hash is not retained")
+	}
+	if _, err := transaction.Exec(ctx, `INSERT INTO collaboration_export_checkpoints(checkpoint_id, document_id, session_id, idempotency_key, revision, map_hash, requested_by, created_at, status) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`, checkpoint.CheckpointID, checkpoint.DocumentID, checkpoint.SessionID, checkpoint.IdempotencyKey, checkpoint.Revision, checkpoint.MapHash, checkpoint.RequestedBy, checkpoint.CreatedAt, checkpoint.Status); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("insert PostgreSQL export checkpoint: %w", err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("commit PostgreSQL export checkpoint: %w", err)
+	}
+	return model.CloneExportCheckpoint(checkpoint), true, nil
+}
+
+func (store *Store) LookupExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, collabstore.ErrStoreClosed
+	}
+	checkpoint, found, err := lookupExportCheckpoint(ctx, store.pool, documentID, checkpointID)
+	if err != nil || found {
+		return checkpoint, found, err
+	}
+	if exists, existsErr := documentExists(ctx, store.pool, documentID); existsErr != nil || !exists {
+		return model.ExportCheckpoint{}, false, missingOrError(existsErr)
+	}
+	return model.ExportCheckpoint{}, false, nil
+}
+
+func (store *Store) CompleteExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID, completion model.ExportCheckpointCompletion) (model.ExportCheckpoint, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, collabstore.ErrStoreClosed
+	}
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("begin PostgreSQL checkpoint completion: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(context.Background()) }()
+	checkpoint, found, err := lookupExportCheckpointForUpdate(ctx, transaction, documentID, checkpointID)
+	if err != nil {
+		return model.ExportCheckpoint{}, err
+	}
+	if !found {
+		return model.ExportCheckpoint{}, collabstore.ErrCheckpointMissing
+	}
+	if checkpoint.Status != model.ExportCheckpointPending {
+		if collabstore.CheckpointMatchesCompletion(checkpoint, completion) {
+			return checkpoint, nil
+		}
+		return model.ExportCheckpoint{}, collabstore.ErrCheckpointTerminal
+	}
+	completed, err := checkpoint.Complete(completion)
+	if err != nil {
+		return model.ExportCheckpoint{}, err
+	}
+	var artifactHash, diagnosticCode any
+	if completed.ArtifactHash != "" {
+		artifactHash = completed.ArtifactHash
+	}
+	if completed.DiagnosticCode != "" {
+		diagnosticCode = completed.DiagnosticCode
+	}
+	result, err := transaction.Exec(ctx, `UPDATE collaboration_export_checkpoints SET status = $3, artifact_hash = $4, verifier = $5, verifier_version = $6, diagnostic_code = $7, completed_at = $8 WHERE document_id = $1 AND checkpoint_id = $2 AND status = 'pending'`, documentID, checkpointID, completed.Status, artifactHash, completed.Verifier, completed.VerifierVersion, diagnosticCode, completed.CompletedAt)
+	if err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("update PostgreSQL export checkpoint: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return model.ExportCheckpoint{}, fmt.Errorf("complete PostgreSQL export checkpoint changed %d rows", result.RowsAffected())
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("commit PostgreSQL checkpoint completion: %w", err)
+	}
+	return completed, nil
+}
+
 func (store *Store) Close() error {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
@@ -328,6 +453,48 @@ func IsRetryable(err error) bool {
 type queryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+const exportCheckpointColumns = `checkpoint_id, document_id, session_id, idempotency_key, revision, map_hash, requested_by, created_at, status, artifact_hash, verifier, verifier_version, diagnostic_code, completed_at`
+
+func lookupExportCheckpoint(ctx context.Context, database queryer, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	return scanExportCheckpoint(database.QueryRow(ctx, `SELECT `+exportCheckpointColumns+` FROM collaboration_export_checkpoints WHERE document_id = $1 AND checkpoint_id = $2`, documentID, checkpointID))
+}
+
+func lookupExportCheckpointForUpdate(ctx context.Context, database queryer, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	return scanExportCheckpoint(database.QueryRow(ctx, `SELECT `+exportCheckpointColumns+` FROM collaboration_export_checkpoints WHERE document_id = $1 AND checkpoint_id = $2 FOR UPDATE`, documentID, checkpointID))
+}
+
+func lookupExportCheckpointByKey(ctx context.Context, database queryer, documentID model.DocumentID, idempotencyKey string) (model.ExportCheckpoint, bool, error) {
+	return scanExportCheckpoint(database.QueryRow(ctx, `SELECT `+exportCheckpointColumns+` FROM collaboration_export_checkpoints WHERE document_id = $1 AND idempotency_key = $2`, documentID, idempotencyKey))
+}
+
+func scanExportCheckpoint(row pgx.Row) (model.ExportCheckpoint, bool, error) {
+	var checkpoint model.ExportCheckpoint
+	var artifactHash, verifier, verifierVersion, diagnosticCode *string
+	var completedAt *time.Time
+	if err := row.Scan(&checkpoint.CheckpointID, &checkpoint.DocumentID, &checkpoint.SessionID, &checkpoint.IdempotencyKey, &checkpoint.Revision, &checkpoint.MapHash, &checkpoint.RequestedBy, &checkpoint.CreatedAt, &checkpoint.Status, &artifactHash, &verifier, &verifierVersion, &diagnosticCode, &completedAt); errors.Is(err, pgx.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, nil
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("scan PostgreSQL export checkpoint: %w", err)
+	}
+	if artifactHash != nil {
+		checkpoint.ArtifactHash = *artifactHash
+	}
+	if verifier != nil {
+		checkpoint.Verifier = *verifier
+	}
+	if verifierVersion != nil {
+		checkpoint.VerifierVersion = *verifierVersion
+	}
+	if diagnosticCode != nil {
+		checkpoint.DiagnosticCode = *diagnosticCode
+	}
+	checkpoint.CompletedAt = completedAt
+	if err := checkpoint.Validate(); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("validate stored PostgreSQL export checkpoint: %w", err)
+	}
+	return checkpoint, true, nil
 }
 
 func load(ctx context.Context, database queryer, documentID model.DocumentID, lock bool) (model.Snapshot, []model.AcceptedOperation, model.Revision, error) {

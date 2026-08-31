@@ -17,6 +17,8 @@ Publishing uses a temporary sibling directory and rename; it never replaces a Me
 
 ## Local acceptance wrapper
 
+The shipped composition entry point is `go run ./cmd/apheliondmm-meridian-verify`. It strictly loads a trusted manifest, publishes the immutable artifact, configures MCP inspection against that artifact, invokes one fixed PowerShell acceptance script, and emits a single JSON result with manifest hash, artifact hash, verifier version, and exit classification.
+
 The protected wrapper is `scripts/integration/verify-aphelion-stack.ps1`. It is Aphelion-owned orchestration
 and delegates to repository-owned gates; it does not replace `task build`, Content Tools' launcher or CI,
 Meridian-MCP's pinned Cargo workflow, or Meridian-Rift's `RIFT_BUILD.cmd`.

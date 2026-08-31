@@ -385,7 +385,9 @@ func TestEditorRollsBackPendingEditAfterDisconnectAndAcceptsFreshEdit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	network.Receive(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "accepted", SessionID: "session-1", Type: protocol.ServerOperationAccepted, Payload: mustEditorJSON(t, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})})
+	if err := network.Receive(protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "accepted", SessionID: "session-1", Type: protocol.ServerOperationAccepted, Payload: mustEditorJSON(t, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: mapHash})}); err != nil {
+		t.Fatalf("receive accepted operation: %v", err)
+	}
 	application.runScheduled(t)
 	editor.ProcessCollaborationUpdates()
 	assertEditorDirection(t, mapState, "8")

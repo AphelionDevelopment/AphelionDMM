@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -503,8 +504,85 @@ func (service *Service) handleCreateJoinToken(writer http.ResponseWriter, reques
 	writeJSON(writer, http.StatusCreated, map[string]any{"token": token, "actor_id": actorID, "role": body.Role, "expires_at": expiresAt})
 }
 
-func (service *Service) handleExport(writer http.ResponseWriter, _ *http.Request) {
-	writeError(writer, http.StatusNotImplemented, "not_implemented", "export checkpoints are implemented in the durability phase")
+func (service *Service) handleExport(writer http.ResponseWriter, request *http.Request) {
+	sessionID := request.PathValue("session_id")
+	token, session, ok := service.authorizeRecord(request, sessionID)
+	if !ok || !token.principal.CanAdminister() {
+		writeError(writer, http.StatusForbidden, "forbidden", "owner role is required")
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, service.limits.MaxHTTPBodyBytes)
+	var body struct {
+		Revision       model.Revision `json:"revision"`
+		MapHash        string         `json:"map_hash"`
+		IdempotencyKey string         `json:"idempotency_key"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "invalid_request", "export checkpoint request is too large")
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "invalid_request", "invalid export checkpoint request")
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "invalid export checkpoint request")
+		return
+	}
+	if strings.TrimSpace(body.IdempotencyKey) == "" || len(body.IdempotencyKey) > model.MaxCheckpointTextBytes || model.ValidateSHA256("map hash", body.MapHash) != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "invalid export checkpoint request")
+		return
+	}
+	snapshot, err := session.owner.Snapshot(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "unavailable", "session is unavailable")
+		return
+	}
+	mapHash, err := snapshot.Hash()
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "unavailable", "session snapshot is invalid")
+		return
+	}
+	if body.Revision != snapshot.Revision || body.MapHash != mapHash {
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"code": "stale_checkpoint", "message": "export checkpoint precondition does not match the authoritative document",
+			"current_revision": snapshot.Revision, "current_map_hash": mapHash,
+		})
+		return
+	}
+	checkpointID, err := model.NewCheckpointID()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal", "checkpoint id generation failed")
+		return
+	}
+	checkpoint := model.ExportCheckpoint{
+		CheckpointID:   checkpointID,
+		IdempotencyKey: body.IdempotencyKey,
+		DocumentID:     snapshot.DocumentID,
+		SessionID:      sessionID,
+		Revision:       snapshot.Revision,
+		MapHash:        mapHash,
+		RequestedBy:    token.principal.ActorID(),
+		CreatedAt:      service.config.Now().UTC(),
+		Status:         model.ExportCheckpointPending,
+	}
+	stored, _, err := service.store.CreateExportCheckpoint(request.Context(), checkpoint)
+	if err != nil {
+		switch {
+		case errors.Is(err, collabstore.ErrCheckpointConflict):
+			writeError(writer, http.StatusConflict, "idempotency_conflict", "idempotency key conflicts with an existing checkpoint")
+		case errors.Is(err, collabstore.ErrSessionMissing), errors.Is(err, collabstore.ErrStoreClosed):
+			writeError(writer, http.StatusServiceUnavailable, "unavailable", "checkpoint persistence is unavailable")
+		default:
+			writeError(writer, http.StatusInternalServerError, "internal", "checkpoint persistence failed")
+		}
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, stored)
 }
 
 func (service *Service) authorize(request *http.Request, sessionID string) (Principal, sessionRecord, bool) {

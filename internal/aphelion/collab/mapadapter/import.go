@@ -34,10 +34,11 @@ func importSnapshot(source *dmmap.Dmm, metadata model.Snapshot) (model.Snapshot,
 	if err := model.ValidateSHA256("environment hash", metadata.EnvironmentHash); err != nil {
 		return model.Snapshot{}, err
 	}
-	if source.MaxX <= 0 || source.MaxY <= 0 || source.MaxZ <= 0 {
-		return model.Snapshot{}, fmt.Errorf("import map: dimensions must be positive")
+	dimensions := model.Snapshot{MaxX: source.MaxX, MaxY: source.MaxY, MaxZ: source.MaxZ}
+	expectedTiles, err := dimensions.CellCount()
+	if err != nil {
+		return model.Snapshot{}, fmt.Errorf("import map: %w", err)
 	}
-	expectedTiles := source.MaxX * source.MaxY * source.MaxZ
 	if len(source.Tiles) != expectedTiles {
 		return model.Snapshot{}, fmt.Errorf("import map: tile count is %d, want %d", len(source.Tiles), expectedTiles)
 	}

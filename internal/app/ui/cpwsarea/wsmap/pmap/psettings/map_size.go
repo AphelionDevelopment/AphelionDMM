@@ -32,8 +32,10 @@ func (p *Panel) DropSessionMapSize() {
 
 func (p *Panel) showMapSize() {
 	if imgui.CollapsingHeader("Map Size") {
+		// APHELION EDIT ADDITION START - COLLABORATION
 		canChangeMapSize := p.editor.CanChangeMapSize()
 		imgui.BeginDisabledV(!canChangeMapSize)
+		// APHELION EDIT ADDITION END
 		if p.sessionMapSize == nil {
 			p.sessionMapSize = &sessionMapSize{
 				maxX: int32(p.editor.Dmm().MaxX),
@@ -66,19 +68,23 @@ func (p *Panel) showMapSize() {
 			Size(imgui.Vec2{X: -1}).
 			Style(style.ButtonGreen{}).
 			Build()
+		// APHELION EDIT ADDITION START - COLLABORATION
 		imgui.EndDisabled()
 		if !canChangeMapSize {
 			imgui.TextDisabled("Map resize is unavailable during collaboration")
 		}
+		// APHELION EDIT ADDITION END
 	} else {
 		p.sessionMapSize = nil
 	}
 }
 
 func (p *Panel) doSetMapSize() {
+	// APHELION EDIT ADDITION START - COLLABORATION
 	if !p.editor.CanChangeMapSize() {
 		return
 	}
+	// APHELION EDIT ADDITION END
 	log.Printf("do set map size [%s]: %v", p.editor.Dmm().Name, p.sessionMapSize)
 	oldMaxX, oldMaxY, oldMaxZ := p.editor.Dmm().MaxX, p.editor.Dmm().MaxY, p.editor.Dmm().MaxZ
 	p.editor.Dmm().SetMapSize(int(p.sessionMapSize.maxX), int(p.sessionMapSize.maxY), int(p.sessionMapSize.maxZ))

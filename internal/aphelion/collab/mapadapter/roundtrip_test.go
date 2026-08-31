@@ -2,6 +2,7 @@ package mapadapter
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,40 @@ const (
 	testOperationID     = model.OperationID("01890f3e-7b5c-7abc-8def-0123456789bb")
 	testEnvironmentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
+
+func TestApplyAndExportRejectUnsafeDimensionsWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	snapshot := model.Snapshot{
+		ProtocolVersion: model.ProtocolVersion,
+		SchemaVersion:   model.SchemaVersion,
+		DocumentID:      testDocumentID,
+		EnvironmentHash: testEnvironmentHash,
+		MaxX:            model.MaxMapDimension + 1,
+		MaxY:            1,
+		MaxZ:            1,
+	}
+	target := &dmmap.Dmm{Name: "unchanged.dmm", MaxX: 1, MaxY: 1, MaxZ: 1}
+	if err := Apply(target, snapshot); err == nil {
+		t.Fatal("Apply() error = nil for unsafe dimensions")
+	}
+	if target.MaxX != 1 || target.MaxY != 1 || target.MaxZ != 1 || len(target.Tiles) != 0 {
+		t.Fatalf("Apply() mutated target after rejection: %#v", target)
+	}
+	if _, err := Export(snapshot, "unsafe.dmm", false, "\n"); err == nil {
+		t.Fatal("Export() error = nil for unsafe dimensions")
+	}
+}
+
+func TestImportRejectsUnsafeDimensionsBeforeTileCount(t *testing.T) {
+	t.Parallel()
+
+	source := &dmmap.Dmm{MaxX: model.MaxMapDimension + 1, MaxY: 1, MaxZ: 1}
+	_, err := Import(source, testDocumentID, testEnvironmentHash)
+	if err == nil || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("Import() error = %v, want dimension maximum error", err)
+	}
+}
 
 func TestUnknownContentRoundTrip(t *testing.T) {
 	dmmap.PrefabStorage.Free()

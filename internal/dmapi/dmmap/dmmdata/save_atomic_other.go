@@ -1,5 +1,6 @@
 //go:build !windows
 
+// APHELION EDIT ADDITION START - COLLABORATION
 package dmmdata
 
 import (
@@ -21,3 +22,5 @@ func replaceFile(source string, target string) error {
 	closeErr := directory.Close()
 	return errors.Join(syncErr, closeErr)
 }
+
+// APHELION EDIT ADDITION END

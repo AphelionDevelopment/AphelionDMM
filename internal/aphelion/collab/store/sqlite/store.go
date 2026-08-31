@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
@@ -302,6 +303,191 @@ func (store *Store) LookupOperation(ctx context.Context, documentID model.Docume
 		return model.AcceptedOperation{}, false, fmt.Errorf("query document: %w", err)
 	}
 	return model.AcceptedOperation{}, false, nil
+}
+
+func (store *Store) CreateExportCheckpoint(ctx context.Context, checkpoint model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, collabstore.ErrStoreClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if err := checkpoint.Validate(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if checkpoint.Status != model.ExportCheckpointPending {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("new export checkpoint must be pending")
+	}
+	transaction, err := store.database.BeginTx(ctx, nil)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("begin export checkpoint: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	prior, found, err := lookupCheckpointByKey(ctx, transaction, checkpoint.DocumentID, checkpoint.IdempotencyKey)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if found {
+		if collabstore.SameCheckpointRequest(prior, checkpoint) {
+			return prior, false, nil
+		}
+		return model.ExportCheckpoint{}, false, collabstore.ErrCheckpointConflict
+	}
+	prior, found, err = lookupCheckpoint(ctx, transaction, checkpoint.DocumentID, checkpoint.CheckpointID)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	if found {
+		if collabstore.SameCheckpointRequest(prior, checkpoint) {
+			return prior, false, nil
+		}
+		return model.ExportCheckpoint{}, false, collabstore.ErrCheckpointConflict
+	}
+	var retainedHash string
+	if err := transaction.QueryRowContext(ctx, "SELECT map_hash FROM revision_hashes WHERE document_id = ? AND revision = ?", checkpoint.DocumentID, checkpoint.Revision).Scan(&retainedHash); errors.Is(err, sql.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("checkpoint revision/hash is not retained")
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("query checkpoint revision hash: %w", err)
+	}
+	if retainedHash != checkpoint.MapHash {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("checkpoint revision/hash is not retained")
+	}
+	if _, err := transaction.ExecContext(ctx, `INSERT INTO export_checkpoints(checkpoint_id, document_id, session_id, idempotency_key, revision, map_hash, requested_by, created_at, status) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, checkpoint.CheckpointID, checkpoint.DocumentID, checkpoint.SessionID, checkpoint.IdempotencyKey, checkpoint.Revision, checkpoint.MapHash, checkpoint.RequestedBy, checkpoint.CreatedAt.UTC().Format(time.RFC3339Nano), checkpoint.Status); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("insert export checkpoint: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("commit export checkpoint: %w", err)
+	}
+	return model.CloneExportCheckpoint(checkpoint), true, nil
+}
+
+func (store *Store) LookupExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, false, collabstore.ErrStoreClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return model.ExportCheckpoint{}, false, err
+	}
+	checkpoint, found, err := lookupCheckpoint(ctx, store.database, documentID, checkpointID)
+	if err != nil || found {
+		return checkpoint, found, err
+	}
+	var present int
+	if err := store.database.QueryRowContext(ctx, "SELECT 1 FROM documents WHERE document_id = ?", documentID).Scan(&present); errors.Is(err, sql.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, collabstore.ErrSessionMissing
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("query checkpoint document: %w", err)
+	}
+	return model.ExportCheckpoint{}, false, nil
+}
+
+func (store *Store) CompleteExportCheckpoint(ctx context.Context, documentID model.DocumentID, checkpointID model.CheckpointID, completion model.ExportCheckpointCompletion) (model.ExportCheckpoint, error) {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	if store.closed {
+		return model.ExportCheckpoint{}, collabstore.ErrStoreClosed
+	}
+	transaction, err := store.database.BeginTx(ctx, nil)
+	if err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("begin checkpoint completion: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	checkpoint, found, err := lookupCheckpoint(ctx, transaction, documentID, checkpointID)
+	if err != nil {
+		return model.ExportCheckpoint{}, err
+	}
+	if !found {
+		return model.ExportCheckpoint{}, collabstore.ErrCheckpointMissing
+	}
+	if checkpoint.Status != model.ExportCheckpointPending {
+		if collabstore.CheckpointMatchesCompletion(checkpoint, completion) {
+			return checkpoint, nil
+		}
+		return model.ExportCheckpoint{}, collabstore.ErrCheckpointTerminal
+	}
+	completed, err := checkpoint.Complete(completion)
+	if err != nil {
+		return model.ExportCheckpoint{}, err
+	}
+	var artifactHash, diagnosticCode any
+	if completed.ArtifactHash != "" {
+		artifactHash = completed.ArtifactHash
+	}
+	if completed.DiagnosticCode != "" {
+		diagnosticCode = completed.DiagnosticCode
+	}
+	result, err := transaction.ExecContext(ctx, `UPDATE export_checkpoints SET status = ?, artifact_hash = ?, verifier = ?, verifier_version = ?, diagnostic_code = ?, completed_at = ? WHERE document_id = ? AND checkpoint_id = ? AND status = 'pending'`, completed.Status, artifactHash, completed.Verifier, completed.VerifierVersion, diagnosticCode, completed.CompletedAt.UTC().Format(time.RFC3339Nano), documentID, checkpointID)
+	if err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("update export checkpoint: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("read export checkpoint update result: %w", err)
+	}
+	if rows != 1 {
+		return model.ExportCheckpoint{}, fmt.Errorf("complete export checkpoint changed %d rows", rows)
+	}
+	if err := transaction.Commit(); err != nil {
+		return model.ExportCheckpoint{}, fmt.Errorf("commit checkpoint completion: %w", err)
+	}
+	return completed, nil
+}
+
+const checkpointColumns = `checkpoint_id, document_id, session_id, idempotency_key, revision, map_hash, requested_by, created_at, status, artifact_hash, verifier, verifier_version, diagnostic_code, completed_at`
+
+type checkpointQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func lookupCheckpoint(ctx context.Context, database checkpointQueryer, documentID model.DocumentID, checkpointID model.CheckpointID) (model.ExportCheckpoint, bool, error) {
+	return scanCheckpoint(database.QueryRowContext(ctx, "SELECT "+checkpointColumns+" FROM export_checkpoints WHERE document_id = ? AND checkpoint_id = ?", documentID, checkpointID))
+}
+
+func lookupCheckpointByKey(ctx context.Context, database checkpointQueryer, documentID model.DocumentID, idempotencyKey string) (model.ExportCheckpoint, bool, error) {
+	return scanCheckpoint(database.QueryRowContext(ctx, "SELECT "+checkpointColumns+" FROM export_checkpoints WHERE document_id = ? AND idempotency_key = ?", documentID, idempotencyKey))
+}
+
+func scanCheckpoint(row *sql.Row) (model.ExportCheckpoint, bool, error) {
+	var checkpoint model.ExportCheckpoint
+	var createdAt string
+	var artifactHash, verifier, verifierVersion, diagnosticCode, completedAt sql.NullString
+	if err := row.Scan(&checkpoint.CheckpointID, &checkpoint.DocumentID, &checkpoint.SessionID, &checkpoint.IdempotencyKey, &checkpoint.Revision, &checkpoint.MapHash, &checkpoint.RequestedBy, &createdAt, &checkpoint.Status, &artifactHash, &verifier, &verifierVersion, &diagnosticCode, &completedAt); errors.Is(err, sql.ErrNoRows) {
+		return model.ExportCheckpoint{}, false, nil
+	} else if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("scan export checkpoint: %w", err)
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("parse export checkpoint creation time: %w", err)
+	}
+	checkpoint.CreatedAt = parsedCreatedAt
+	if artifactHash.Valid {
+		checkpoint.ArtifactHash = artifactHash.String
+	}
+	if verifier.Valid {
+		checkpoint.Verifier = verifier.String
+	}
+	if verifierVersion.Valid {
+		checkpoint.VerifierVersion = verifierVersion.String
+	}
+	if diagnosticCode.Valid {
+		checkpoint.DiagnosticCode = diagnosticCode.String
+	}
+	if completedAt.Valid {
+		parsedCompletedAt, err := time.Parse(time.RFC3339Nano, completedAt.String)
+		if err != nil {
+			return model.ExportCheckpoint{}, false, fmt.Errorf("parse export checkpoint completion time: %w", err)
+		}
+		checkpoint.CompletedAt = &parsedCompletedAt
+	}
+	if err := checkpoint.Validate(); err != nil {
+		return model.ExportCheckpoint{}, false, fmt.Errorf("validate stored export checkpoint: %w", err)
+	}
+	return checkpoint, true, nil
 }
 
 func (store *Store) Close() error {

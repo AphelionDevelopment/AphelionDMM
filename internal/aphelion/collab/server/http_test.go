@@ -15,6 +15,7 @@ import (
 	"sdmm/internal/aphelion/collab/compat"
 	"sdmm/internal/aphelion/collab/model"
 	"sdmm/internal/aphelion/collab/protocol"
+	collabstore "sdmm/internal/aphelion/collab/store"
 )
 
 func TestValidateListenAddressRequiresLoopback(t *testing.T) {
@@ -228,6 +229,125 @@ func TestHostedOwnerOperationReauthorizesCurrentSessionRole(t *testing.T) {
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("downgraded request status = %d", denied.StatusCode)
 	}
+}
+
+func TestExportCheckpointIsOwnerAuthorizedPreconditionedAndIdempotent(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(10, 0).UTC()
+	_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{Now: func() time.Time { return now }})
+	body, err := json.Marshal(map[string]any{
+		"revision":        created.Revision,
+		"map_hash":        created.MapHash,
+		"idempotency_key": "export-request-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, body)
+	defer func() { _ = firstResponse.Body.Close() }()
+	if firstResponse.StatusCode != http.StatusAccepted {
+		t.Fatalf("create export checkpoint status = %d, want %d", firstResponse.StatusCode, http.StatusAccepted)
+	}
+	var first model.ExportCheckpoint
+	if err := json.NewDecoder(firstResponse.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	if first.SessionID != created.SessionID || first.Revision != created.Revision || first.MapHash != created.MapHash || first.Status != model.ExportCheckpointPending || !first.CreatedAt.Equal(now) {
+		t.Fatalf("created export checkpoint = %#v", first)
+	}
+
+	secondResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, body)
+	defer func() { _ = secondResponse.Body.Close() }()
+	if secondResponse.StatusCode != http.StatusAccepted {
+		t.Fatalf("retry export checkpoint status = %d, want %d", secondResponse.StatusCode, http.StatusAccepted)
+	}
+	var second model.ExportCheckpoint
+	if err := json.NewDecoder(secondResponse.Body).Decode(&second); err != nil {
+		t.Fatal(err)
+	}
+	if second.CheckpointID != first.CheckpointID || !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("retry checkpoint = %#v, want original %#v", second, first)
+	}
+
+	staleBody, err := json.Marshal(map[string]any{
+		"revision":        created.Revision + 1,
+		"map_hash":        created.MapHash,
+		"idempotency_key": "export-request-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, staleBody)
+	defer func() { _ = staleResponse.Body.Close() }()
+	if staleResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("stale export checkpoint status = %d, want %d", staleResponse.StatusCode, http.StatusConflict)
+	}
+
+	trailingResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, append(body, []byte(` {}`)...))
+	defer func() { _ = trailingResponse.Body.Close() }()
+	if trailingResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("trailing export checkpoint status = %d, want %d", trailingResponse.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestExportCheckpointRejectsNonOwnerOversizedAndUnavailableRequests(t *testing.T) {
+	t.Run("non-owner", func(t *testing.T) {
+		_, created, testServer := startHTTPTestSession(t)
+		joinResponse := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/join-tokens", created.OwnerToken, []byte(`{"role":"viewer","display_name":"Viewer"}`))
+		defer func() { _ = joinResponse.Body.Close() }()
+		if joinResponse.StatusCode != http.StatusCreated {
+			t.Fatalf("create viewer token status = %d", joinResponse.StatusCode)
+		}
+		var joined struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(joinResponse.Body).Decode(&joined); err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(map[string]any{"revision": created.Revision, "map_hash": created.MapHash, "idempotency_key": "viewer-export"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", joined.Token, body)
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("viewer export status = %d, want %d", response.StatusCode, http.StatusForbidden)
+		}
+	})
+
+	t.Run("oversized", func(t *testing.T) {
+		_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{Limits: Limits{MaxHTTPBodyBytes: 64}})
+		oversized := []byte(`{"idempotency_key":"` + strings.Repeat("x", 100) + `"}`)
+		response := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, oversized)
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("oversized export status = %d, want %d", response.StatusCode, http.StatusRequestEntityTooLarge)
+		}
+	})
+
+	t.Run("unavailable store", func(t *testing.T) {
+		store := &failingCheckpointStore{SessionStore: NewMemoryStore(), err: collabstore.ErrStoreClosed}
+		_, created, testServer := startHTTPTestSessionWithConfig(t, ServiceConfig{Store: store})
+		body, err := json.Marshal(map[string]any{"revision": created.Revision, "map_hash": created.MapHash, "idempotency_key": "unavailable-export"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := postJSON(t, testServer.URL+"/v1/sessions/"+created.SessionID+"/exports", created.OwnerToken, body)
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("unavailable export status = %d, want %d", response.StatusCode, http.StatusServiceUnavailable)
+		}
+	})
+}
+
+type failingCheckpointStore struct {
+	SessionStore
+	err error
+}
+
+func (store *failingCheckpointStore) CreateExportCheckpoint(context.Context, model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
+	return model.ExportCheckpoint{}, false, store.err
 }
 
 func postJSON(t *testing.T, url, token string, body []byte) *http.Response {

@@ -6,7 +6,9 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
+	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 )
 
@@ -132,6 +134,101 @@ func TestDocumentOwnerDoesNotAdvanceWhenAppendFails(t *testing.T) {
 	}
 }
 
+func TestSubmitReconcilesCommittedAppendError(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testSnapshot(t, 2)
+	store := &committedThenFailedStore{MemoryStore: NewMemoryStore(), failNext: true}
+	owner, err := StartDocument(context.Background(), snapshot, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+
+	first, err := owner.Submit(context.Background(), testOperation(t, snapshot, 1))
+	if err != nil {
+		t.Fatalf("Submit(first) error = %v, want reconciled success", err)
+	}
+	if first.Revision != 1 {
+		t.Fatalf("Submit(first) revision = %d, want 1", first.Revision)
+	}
+	current, err := owner.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != first.Revision {
+		t.Fatalf("snapshot revision = %d, want reconciled revision %d", current.Revision, first.Revision)
+	}
+	second, err := owner.Submit(context.Background(), testOperation(t, current, 2))
+	if err != nil {
+		t.Fatalf("Submit(second) error = %v", err)
+	}
+	if second.Revision != 2 {
+		t.Fatalf("Submit(second) revision = %d, want 2", second.Revision)
+	}
+}
+
+func TestSubmitReconcilesDuplicateAheadOfMemory(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testSnapshot(t, 1)
+	store := NewMemoryStore()
+	owner, err := StartDocument(context.Background(), snapshot, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+
+	operation := testOperation(t, snapshot, 1)
+	durableDocument, err := engine.NewDocument(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable, err := durableDocument.Apply(operation, time.Unix(10, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(context.Background(), durable); err != nil {
+		t.Fatal(err)
+	}
+	accepted, duplicate, err := owner.SubmitWithStatus(context.Background(), operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !duplicate || accepted.Revision != durable.Revision {
+		t.Fatalf("duplicate result = %#v/%t, want revision %d duplicate", accepted, duplicate, durable.Revision)
+	}
+	current, err := owner.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != durable.Revision {
+		t.Fatalf("snapshot revision = %d, want reconciled revision %d", current.Revision, durable.Revision)
+	}
+}
+
+func TestSubmitRejectsConflictingOperationIDReuse(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testSnapshot(t, 2)
+	store := NewMemoryStore()
+	owner, err := StartDocument(context.Background(), snapshot, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+
+	operation := testOperation(t, snapshot, 1)
+	if _, err := owner.Submit(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	conflict := model.CloneOperation(operation)
+	conflict.Changes[0].Coord.X = 2
+	if _, err := owner.Submit(context.Background(), conflict); err == nil {
+		t.Fatal("Submit(conflicting operation ID) error = nil")
+	}
+}
+
 func TestDocumentOwnerCloseIsContextAware(t *testing.T) {
 	t.Parallel()
 
@@ -150,12 +247,30 @@ func TestDocumentOwnerCloseIsContextAware(t *testing.T) {
 
 var errAppendFailed = errors.New("append failed")
 
+var errCommittedThenFailed = errors.New("append outcome is unknown")
+
 type failingAppendStore struct {
 	*MemoryStore
 }
 
 func (store *failingAppendStore) Append(context.Context, model.AcceptedOperation) error {
 	return errAppendFailed
+}
+
+type committedThenFailedStore struct {
+	*MemoryStore
+	failNext bool
+}
+
+func (store *committedThenFailedStore) Append(ctx context.Context, accepted model.AcceptedOperation) error {
+	if err := store.MemoryStore.Append(ctx, accepted); err != nil {
+		return err
+	}
+	if store.failNext {
+		store.failNext = false
+		return errCommittedThenFailed
+	}
+	return nil
 }
 
 func testSnapshot(t *testing.T, maxX int) model.Snapshot {

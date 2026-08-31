@@ -301,7 +301,14 @@ $goToolEnvironment.RUST_TARGET = $rustTarget
 
 [void](Invoke-Gate "Content Tools Ruff" "aphelion-content-tools" $python @("-m", "ruff", "check", ".") $ContentToolsRoot)
 [void](Invoke-Gate "Content Tools Pyright" "aphelion-content-tools" $python @("-m", "pyright") $ContentToolsRoot)
-[void](Invoke-Gate "Content Tools Python tests" "aphelion-content-tools" $python @("-m", "unittest", "discover") $ContentToolsRoot)
+$pythonSuiteOutput = Join-Path $script:EvidenceRoot "content-tools-python-suites"
+$pythonSuiteEnvironment = @{ PATH = (Split-Path -Parent $python) + [System.IO.Path]::PathSeparator + $env:PATH }
+[void](Invoke-Gate "Content Tools bounded Python suites" "aphelion-content-tools" "powershell.exe" @(
+	"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+	(Join-Path $ContentToolsRoot "tools\testing\run-python-suites.ps1"),
+	"-RepositoryRoot", $ContentToolsRoot,
+	"-OutputRoot", $pythonSuiteOutput
+) $ContentToolsRoot $pythonSuiteEnvironment)
 [void](Invoke-Gate "Content Tools API contract" "aphelion-content-tools" "npm.cmd" @("--prefix", "webapp/frontend", "run", "gen:api") $ContentToolsRoot)
 [void](Invoke-Gate "Content Tools frontend tests" "aphelion-content-tools" "npm.cmd" @("--prefix", "webapp/frontend", "test", "--", "--run") $ContentToolsRoot)
 [void](Invoke-Gate "Content Tools frontend types" "aphelion-content-tools" "npm.cmd" @("--prefix", "webapp/frontend", "run", "typecheck") $ContentToolsRoot)
@@ -314,48 +321,89 @@ else {
 }
 
 $stageRoot = Join-Path $script:EvidenceRoot ("stages\" + $script:RunID)
-$stageEnvironment = @{
-	APHELION_MERIDIAN_MCP_REAL = $InstalledMcp
-	APHELION_MERIDIAN_RIFT_ROOT = $MeridianRiftRoot
-	APHELION_MERIDIAN_STAGE_ROOT = $stageRoot
+$targetID = "virtual-domains/test-only"
+$targetRelative = "_maps/virtual_domains/test_only.dmm"
+$sourceTarget = Join-Path $MeridianRiftRoot ($targetRelative.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+$repositoryRevision = (& git.exe -C $MeridianRiftRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($repositoryRevision)) { throw "Could not read Meridian-Rift revision." }
+$dmePath = Join-Path $MeridianRiftRoot "tgstation.dme"
+$manifestPath = Join-Path $script:EvidenceRoot "meridian-stage-manifest.json"
+$manifest = [ordered]@{
+	schema_version = 1
+	repository_identity = "meridian-rift"
+	repository_revision = $repositoryRevision
+	dme_identifier = "tgstation.dme"
+	map_target_id = $targetID
+	protocol_version = 1
+	environment_sha256 = (Get-FileHash -LiteralPath $dmePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	input_map_sha256 = (Get-FileHash -LiteralPath $sourceTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+	output_map_sha256 = (Get-FileHash -LiteralPath $sourceTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+	accepted_revision = 1
+	producer = [ordered]@{ name = "AphelionDMM"; version = "stack-verifier" }
 }
-$stagePassed = Invoke-Gate "Installed MCP staged-map conformance" "AphelionDMM + Meridian-MCP + Meridian-Rift" "go.exe" @("test", "./internal/aphelion/integration/meridian", "-run", "TestRealMeridianStagingOnly", "-count=1", "-v") $AphelionRoot $stageEnvironment
+$manifestJSON = $manifest | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText($manifestPath, $manifestJSON, [System.Text.UTF8Encoding]::new($false))
 
-$stageEvidence = Get-ChildItem -LiteralPath $stageRoot -Filter "*.mcp-evidence.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-if (-not $stagePassed -or -not $stageEvidence) {
-	Add-UnavailableGate "Authoritative Meridian build" "Meridian-Rift" "Staged-map conformance did not produce evidence."
+$acceptanceRoot = Join-Path $script:EvidenceRoot "meridian-acceptance"
+$resolvedEvidenceRoot = [System.IO.Path]::GetFullPath($script:EvidenceRoot)
+$resolvedAcceptanceRoot = [System.IO.Path]::GetFullPath($acceptanceRoot)
+if (-not $resolvedAcceptanceRoot.StartsWith($resolvedEvidenceRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+	throw "Acceptance worktree escaped the evidence root."
 }
-else {
-	$stage = Get-Content -LiteralPath $stageEvidence.FullName -Raw | ConvertFrom-Json
-	$acceptanceRoot = Join-Path $script:EvidenceRoot "meridian-acceptance"
-	$resolvedEvidenceRoot = [System.IO.Path]::GetFullPath($script:EvidenceRoot)
-	$resolvedAcceptanceRoot = [System.IO.Path]::GetFullPath($acceptanceRoot)
-	if (-not $resolvedAcceptanceRoot.StartsWith($resolvedEvidenceRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-		throw "Acceptance worktree escaped the evidence root."
+$worktreeAdded = $false
+try {
+	$worktreeAdded = Invoke-Gate "Meridian clean acceptance checkout" "Meridian-Rift" "git.exe" @("-C", $MeridianRiftRoot, "worktree", "add", "--detach", $acceptanceRoot, $repositoryRevision) $AphelionRoot
+	if (-not $worktreeAdded) {
+		Add-UnavailableGate "Shipped Meridian stage and acceptance" "AphelionDMM + Meridian-MCP + Meridian-Rift" "The clean detached acceptance checkout could not be created."
 	}
-	$worktreeAdded = $false
-	try {
-		$worktreeAdded = Invoke-Gate "Meridian clean acceptance checkout" "Meridian-Rift" "git.exe" @("-C", $MeridianRiftRoot, "worktree", "add", "--detach", $acceptanceRoot, $stage.repository_revision) $AphelionRoot
-		if ($worktreeAdded) {
-			$target = Join-Path $acceptanceRoot "_maps\virtual_domains\test_only.dmm"
-			Copy-Item -LiteralPath $stage.stage.map_file -Destination $target -Force
-			$bootstrapCache = Prepare-MeridianOfflineDependencies $MeridianRiftRoot $acceptanceRoot
-			if ($bootstrapCache) {
-				$network = if ($AllowNetwork) { "allow" } else { "offline" }
-				[void](Invoke-Gate "Authoritative Meridian build" "Meridian-Rift" "cmd.exe" @("/d", "/c", "RIFT_BUILD.cmd") $acceptanceRoot @{ MERIDIAN_RIFT_BUILD_NETWORK = $network; TG_BOOTSTRAP_CACHE = $bootstrapCache; PSModulePath = $script:WindowsPowerShellModulePath } ($TimeoutMinutes * 60))
-			}
-			else {
-				Add-UnavailableGate "Authoritative Meridian build" "Meridian-Rift" "Local offline prerequisites were unavailable."
-			}
+	else {
+		$bootstrapCache = Prepare-MeridianOfflineDependencies $MeridianRiftRoot $acceptanceRoot
+		if (-not $bootstrapCache) {
+			Add-UnavailableGate "Shipped Meridian stage and acceptance" "AphelionDMM + Meridian-MCP + Meridian-Rift" "Local offline prerequisites were unavailable."
 		}
 		else {
-			Add-UnavailableGate "Authoritative Meridian build" "Meridian-Rift" "The clean detached acceptance checkout could not be created."
+			$acceptanceScript = Join-Path $script:EvidenceRoot "accept-meridian-stage.ps1"
+			@'
+param([string] $RepositoryRoot, [string] $StagedMap, [string] $MapTargetID)
+$ErrorActionPreference = "Stop"
+if ($MapTargetID -ne "virtual-domains/test-only") { throw "Unexpected map target identifier." }
+$target = Join-Path $RepositoryRoot "_maps\virtual_domains\test_only.dmm"
+Copy-Item -LiteralPath $StagedMap -Destination $target -Force
+& cmd.exe /d /c RIFT_BUILD.cmd
+exit $LASTEXITCODE
+'@ | Set-Content -LiteralPath $acceptanceScript -Encoding UTF8
+			$network = if ($AllowNetwork) { "allow" } else { "offline" }
+			$stageEnvironment = @{
+				MERIDIAN_RIFT_BUILD_NETWORK = $network
+				TG_BOOTSTRAP_CACHE = $bootstrapCache
+				PSModulePath = $script:WindowsPowerShellModulePath
+			}
+			$stagePassed = Invoke-Gate "Shipped Meridian stage and acceptance" "AphelionDMM + Meridian-MCP + Meridian-Rift" "go.exe" @(
+				"run", "./cmd/apheliondmm-meridian-verify",
+				"--repository-root", $MeridianRiftRoot,
+				"--repository-identity", "meridian-rift",
+				"--dme", "tgstation.dme",
+				"--map-target-id", $targetID,
+				"--map-target", $targetRelative,
+				"--stage-root", $stageRoot,
+				"--manifest", $manifestPath,
+				"--candidate", $sourceTarget,
+				"--mcp-executable", $InstalledMcp,
+				"--acceptance-script", $acceptanceScript,
+				"--acceptance-root", $acceptanceRoot,
+				"--allow-dirty"
+			) $AphelionRoot $stageEnvironment ($TimeoutMinutes * 60)
+			$stageLog = Join-Path $script:EvidenceRoot "logs\shipped-meridian-stage-and-acceptance.stdout.log"
+			if ($stagePassed) {
+				$stage = Get-Content -LiteralPath $stageLog -Raw | ConvertFrom-Json
+				if ($stage.exit_classification -ne "accepted") { throw "Shipped Meridian verifier did not return accepted evidence." }
+			}
 		}
 	}
-	finally {
-		if ($worktreeAdded) {
-			[void](Invoke-Gate "Meridian acceptance cleanup" "Meridian-Rift" "git.exe" @("-C", $MeridianRiftRoot, "worktree", "remove", "--force", $acceptanceRoot) $AphelionRoot @{} 120)
-		}
+}
+finally {
+	if ($worktreeAdded) {
+		[void](Invoke-Gate "Meridian acceptance cleanup" "Meridian-Rift" "git.exe" @("-C", $MeridianRiftRoot, "worktree", "remove", "--force", $acceptanceRoot) $AphelionRoot @{} 120)
 	}
 }
 

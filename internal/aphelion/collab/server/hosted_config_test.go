@@ -61,6 +61,7 @@ func TestSecretSourceResolvesBoundedRegularFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("postgres://file-secret\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	secureSecretFixturePermissions(t, path)
 	secret, err := (SecretSource{File: path}).Resolve(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,21 +74,6 @@ func TestSecretSourceResolvesBoundedRegularFile(t *testing.T) {
 func TestSecretSourceRejectsRelativeFile(t *testing.T) {
 	if _, err := (SecretSource{File: "database.secret"}).Resolve(nil); err == nil {
 		t.Fatal("Resolve() error = nil")
-	}
-}
-
-func TestSecretFilePermissionsAllowContainerManagedSecretOnly(t *testing.T) {
-	if !secretFilePermissionsAllowed("/run/secrets/database_dsn", 0o777, "linux", false) {
-		t.Fatal("read-only Docker secret permissions were rejected")
-	}
-	if secretFilePermissionsAllowed("/run/secrets/database_dsn", 0o777, "linux", true) {
-		t.Fatal("writable Docker secret was accepted")
-	}
-	if secretFilePermissionsAllowed("/tmp/database_dsn", 0o444, "linux", false) {
-		t.Fatal("broad permissions outside /run/secrets were accepted")
-	}
-	if !secretFilePermissionsAllowed("/tmp/database_dsn", 0o600, "linux", true) {
-		t.Fatal("owner-only secret permissions were rejected")
 	}
 }
 

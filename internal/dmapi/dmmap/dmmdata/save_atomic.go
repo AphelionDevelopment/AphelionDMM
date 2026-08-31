@@ -1,3 +1,4 @@
+// APHELION EDIT ADDITION START - COLLABORATION
 package dmmdata
 
 import (
@@ -146,3 +147,5 @@ func writeSaveUint64(buffer *bytes.Buffer, value uint64) {
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = buffer.Write(encoded[:])
 }
+
+// APHELION EDIT ADDITION END

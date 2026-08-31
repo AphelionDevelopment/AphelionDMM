@@ -1,3 +1,4 @@
+// APHELION EDIT ADDITION START - COLLABORATION
 package pmap
 
 import (
@@ -80,3 +81,5 @@ func presenceScreenBounds(overlay collabui.PresenceOverlay, iconSize int, scale,
 	}
 	return min, min.Plus(imgui.Vec2{X: scaledIconSize, Y: scaledIconSize})
 }
+
+// APHELION EDIT ADDITION END

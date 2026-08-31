@@ -7,8 +7,13 @@ type Command struct {
 	id   uint64
 	name string
 
+	/* APHELION EDIT REMOVAL START - COLLABORATION
+	undo, redo func()
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION START - COLLABORATION
 	undo, redo           func()
 	undoAsync, redoAsync func(func(error))
+	// APHELION EDIT ADDITION END
 }
 
 func Make(name string, undo, redo func()) Command {
@@ -21,6 +26,7 @@ func Make(name string, undo, redo func()) Command {
 	}
 }
 
+// APHELION EDIT ADDITION START - COLLABORATION
 func MakeAsync(name string, undo, redo func(func(error))) Command {
 	commandCounter++
 	return Command{
@@ -31,10 +37,24 @@ func MakeAsync(name string, undo, redo func(func(error))) Command {
 	}
 }
 
+// APHELION EDIT ADDITION END
+
 func (c Command) ReadableName() string {
 	return c.name
 }
 
+/* APHELION EDIT REMOVAL START - COLLABORATION
+func (c Command) Run() Command {
+	c.undo()
+	return Command{
+		id:   c.id,
+		name: c.name,
+		undo: c.redo,
+		redo: c.undo,
+	}
+}
+APHELION EDIT REMOVAL END */
+// APHELION EDIT ADDITION START - COLLABORATION
 func (c Command) Run() Command {
 	c.undo()
 	return c.reversed()
@@ -65,3 +85,5 @@ func (c Command) reversed() Command {
 		redoAsync: c.undoAsync,
 	}
 }
+
+// APHELION EDIT ADDITION END

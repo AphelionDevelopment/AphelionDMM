@@ -213,6 +213,7 @@ func (t *ToolGrab) onStop(util.Point) {
 		t.stopSelectArea()
 	case tSelectModeMoveArea:
 		t.stopMoveArea()
+		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: go ed.CommitChanges("Move Grabbed Area")
 		ed.CommitOperation("Move Grabbed Area")
 	}
 

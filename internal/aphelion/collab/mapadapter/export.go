@@ -31,12 +31,16 @@ func apply(target *dmmap.Dmm, snapshot model.Snapshot, environment *dmenv.Dme) e
 	if target == nil {
 		return fmt.Errorf("apply map: target is nil")
 	}
-	if _, err := snapshot.Hash(); err != nil {
+	if err := snapshot.Validate(); err != nil {
 		return fmt.Errorf("apply map: validate snapshot: %w", err)
+	}
+	cellCount, err := snapshot.CellCount()
+	if err != nil {
+		return fmt.Errorf("apply map: count snapshot cells: %w", err)
 	}
 	states := statesByCoord(snapshot)
 
-	tiles := make([]*dmmap.Tile, 0, snapshot.MaxX*snapshot.MaxY*snapshot.MaxZ)
+	tiles := make([]*dmmap.Tile, 0, cellCount)
 	for z := 1; z <= snapshot.MaxZ; z++ {
 		for y := 1; y <= snapshot.MaxY; y++ {
 			for x := 1; x <= snapshot.MaxX; x++ {
@@ -70,8 +74,12 @@ func apply(target *dmmap.Dmm, snapshot model.Snapshot, environment *dmenv.Dme) e
 }
 
 func Export(snapshot model.Snapshot, path string, isTGM bool, lineBreak string) (*dmmdata.DmmData, error) {
-	if _, err := snapshot.Hash(); err != nil {
+	if err := snapshot.Validate(); err != nil {
 		return nil, fmt.Errorf("export map: validate snapshot: %w", err)
+	}
+	cellCount, err := snapshot.CellCount()
+	if err != nil {
+		return nil, fmt.Errorf("export map: count snapshot cells: %w", err)
 	}
 	if lineBreak != "\n" && lineBreak != "\r\n" {
 		return nil, fmt.Errorf("export map: unsupported line break %q", lineBreak)
@@ -80,7 +88,7 @@ func Export(snapshot model.Snapshot, path string, isTGM bool, lineBreak string) 
 
 	uniqueStates := make([]model.TileState, 0)
 	stateIndexes := make(map[[sha256.Size]byte]int)
-	gridIndexes := make(map[util.Point]int, snapshot.MaxX*snapshot.MaxY*snapshot.MaxZ)
+	gridIndexes := make(map[util.Point]int, cellCount)
 	for z := 1; z <= snapshot.MaxZ; z++ {
 		for y := 1; y <= snapshot.MaxY; y++ {
 			for x := 1; x <= snapshot.MaxX; x++ {

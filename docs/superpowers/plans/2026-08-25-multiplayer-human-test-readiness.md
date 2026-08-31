@@ -1,5 +1,7 @@
 # Multiplayer Human-Test Readiness
 
+> **Superseded on 2026-08-31:** Use `../../verification/multiplayer-implementation-readiness.md`, `../../verification/online-pilot-readiness.md`, and `../../verification/public-hosting-readiness.md` for current evidence. The older completion claims below are retained as historical evidence and do not establish current PostgreSQL, cross-stack, external-service, hosted-CI, or human acceptance.
+
 **Status date:** 2026-08-25
 
 **Decision:** AphelionDMM has reached the human desktop-test boundary. Automated work that can be completed safely on the local workstation is implemented or explicitly reconciled below. Aphelion Content Tools is excluded from this readiness decision and must be evaluated by its separate owner.
