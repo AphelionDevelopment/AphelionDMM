@@ -18,6 +18,11 @@ func (e *Editor) InstanceSelect(i *dmminstance.Instance) {
 
 // InstanceMoveToTop swaps the provided instance with the one which is upper.
 func (e *Editor) InstanceMoveToTop(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(i.Coord())
 	// APHELION EDIT ADDITION END
@@ -26,6 +31,11 @@ func (e *Editor) InstanceMoveToTop(i *dmminstance.Instance) {
 
 // InstanceMoveToBottom swaps the provided instance with the one which is under.
 func (e *Editor) InstanceMoveToBottom(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(i.Coord())
 	// APHELION EDIT ADDITION END
@@ -66,6 +76,11 @@ func (e *Editor) instanceMove(tile *dmmap.Tile, i *dmminstance.Instance, top boo
 
 // InstanceDelete deletes the provided instance from the map.
 func (e *Editor) InstanceDelete(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(i.Coord())
 	// APHELION EDIT ADDITION END
@@ -76,6 +91,11 @@ func (e *Editor) InstanceDelete(i *dmminstance.Instance) {
 
 // InstancesDeleteByPrefab deletes from the map all instances from the provided prefab.
 func (e *Editor) InstancesDeleteByPrefab(prefab *dmmprefab.Prefab) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	instances := e.InstancesFindByPrefabId(prefab.Id())
 	for _, instance := range instances {
 		// APHELION EDIT ADDITION START - COLLABORATION
@@ -89,6 +109,11 @@ func (e *Editor) InstancesDeleteByPrefab(prefab *dmmprefab.Prefab) {
 
 // InstanceReplace replaces the provided instance with the provided prefab.
 func (e *Editor) InstanceReplace(i *dmminstance.Instance, prefab *dmmprefab.Prefab) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(i.Coord())
 	// APHELION EDIT ADDITION END
@@ -107,6 +132,11 @@ func (e *Editor) InstanceReplace(i *dmminstance.Instance, prefab *dmmprefab.Pref
 
 // InstanceReset resets the provided instance to the initial state (no custom variables).
 func (e *Editor) InstanceReset(i *dmminstance.Instance) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(i.Coord())
 	// APHELION EDIT ADDITION END

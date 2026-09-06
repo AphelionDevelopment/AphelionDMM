@@ -37,6 +37,14 @@ type Search struct {
 
 	resultsAll      []*dmminstance.Instance
 	resultsFiltered []*dmminstance.Instance
+	// APHELION EDIT ADDITION START - SEARCH QUERY LIFECYCLE
+	resultGeneration uint64
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT ADDITION START - SEARCH VIEW OWNERSHIP
+	resultEditor  *editor.Editor
+	resultVersion uint64
+	resultReady   bool
+	// APHELION EDIT ADDITION END
 }
 
 func (s *Search) Init(app App) {
@@ -54,7 +62,11 @@ func (s *Search) Init(app App) {
 }
 
 func (s *Search) Free() {
-	s.resultsAll = s.resultsAll[:0]
+	// APHELION EDIT ADDITION START - SEARCH VIEW OWNERSHIP
+	s.resultEditor, s.resultVersion, s.resultReady = nil, 0, false
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT CHANGE - SEARCH RETENTION - ORIGINAL: s.resultsAll = s.resultsAll[:0]
+	s.resultsAll = nil
 	s.selectedResultIdx = -1
 	s.focusedResultIdx = -1
 	s.lastFocusedResultIdx = -1

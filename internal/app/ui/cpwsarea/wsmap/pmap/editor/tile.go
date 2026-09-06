@@ -6,13 +6,18 @@ import (
 	"sdmm/internal/dmapi/dmmap"
 	"sdmm/internal/dmapi/dmmap/dmmdata"
 	"sdmm/internal/util"
-
+	/* APHELION EDIT REMOVAL START - PASTE PLACEMENT
 	"github.com/rs/zerolog/log"
-)
+	APHELION EDIT REMOVAL END */)
 
 // TileCopySelected copies currently selected tiles.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileCopySelected() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	e.app.Clipboard().Copy(e.app.PathsFilter(), e.dmm, tools.SelectedTiles())
 }
 
@@ -20,6 +25,9 @@ func (e *Editor) TileCopySelected() {
 // Pasted tiles will be automatically selected by the tools.ToolGrab.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TilePasteSelected() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	e.startPastePlacement()
+	/* APHELION EDIT REMOVAL START - PASTE PLACEMENT
 	pasteCoord := e.pMap.CanvasState().LastHoveredTile()
 	pastedData := e.app.Clipboard().Buffer()
 
@@ -84,6 +92,8 @@ func (e *Editor) TilePasteSelected() {
 
 	// Select tiles we've pasted.
 	toolSelect.SelectArea(tilesToSelect)
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION END
 }
 
 // TileCutSelected does a cut (copy+delete) of the currently hovered tile.
@@ -96,6 +106,11 @@ func (e *Editor) TileCutSelected() {
 // TileDeleteSelected deletes the last hovered by the mouse tile.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileDeleteSelected() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	for _, tile := range tools.SelectedTiles() {
 		e.TileDelete(tile)
 	}
@@ -104,6 +119,11 @@ func (e *Editor) TileDeleteSelected() {
 // TileDelete deletes content of the tile with the provided coord.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileDelete(coord util.Point) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(coord)
 	// APHELION EDIT ADDITION END
@@ -123,6 +143,11 @@ func (e *Editor) tileDelete(tile *dmmap.Tile) {
 // TileReplace replaces content of the tile with the provided coord with provided prefabs.
 // Respects a dm.PathsFilter state.
 func (e *Editor) TileReplace(coord util.Point, prefabs dmmdata.Prefabs) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	// APHELION EDIT ADDITION START - COLLABORATION
 	e.BeginTileChange(coord)
 	// APHELION EDIT ADDITION END

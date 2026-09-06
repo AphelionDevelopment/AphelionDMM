@@ -143,6 +143,11 @@ func (v *VarEditor) setInstanceVariable(varName, varValue string) {
 		return
 	}
 	// APHELION EDIT ADDITION END
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e := v.app.CurrentEditor(); e != nil && e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if len(varValue) == 0 {
 		varValue = dmvars.NullValue
 	}
@@ -185,6 +190,11 @@ func (v *VarEditor) setInstanceVariable(varName, varValue string) {
 func (v *VarEditor) setPrefabVariable(varName, varValue string) {
 	// APHELION EDIT ADDITION START - COLLABORATION
 	if v.environmentObject() == nil {
+		return
+	}
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e := v.app.CurrentEditor(); e != nil && e.HasPastePlacement() {
 		return
 	}
 	// APHELION EDIT ADDITION END

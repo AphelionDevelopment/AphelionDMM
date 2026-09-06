@@ -1,0 +1,250 @@
+package wsmap
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"github.com/SpaiR/imgui-go"
+	"github.com/go-gl/glfw/v3.3/glfw"
+	"sdmm/internal/aphelion/collab/protocol"
+	"sdmm/internal/app/ui/cpwsarea/wsmap/tools"
+	"sdmm/internal/app/ui/shortcut"
+	"sdmm/internal/dmapi/dm"
+	"sdmm/internal/util"
+)
+
+func TestPastePreviewKeyboardConfirmationAndTextInput(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(32, 0, 1)
+	e.TilePasteSelected()
+	g := tools.Selected().(*tools.ToolGrab)
+	pressSelectionShortcut(glfw.KeyLeftControl, glfw.KeyEnter)
+	if !g.Placing() {
+		t.Fatal("modified Enter confirmed paste")
+	}
+	io := imgui.CurrentIO()
+	input := "text"
+	for frame := 0; frame < 3; frame++ {
+		if frame == 2 {
+			io.KeyPress(int(glfw.KeyEnter))
+		}
+		imgui.NewFrame()
+		imgui.Begin("Paste input verification")
+		if frame == 0 {
+			imgui.SetKeyboardFocusHere()
+		}
+		imgui.InputText("Value", &input)
+		if frame == 2 {
+			if !imgui.IsAnyItemActive() {
+				t.Fatal("text fixture not active")
+			}
+			shortcut.Process()
+			if !g.Placing() {
+				t.Fatal("text Enter placed paste")
+			}
+		}
+		imgui.End()
+		imgui.EndFrame()
+	}
+	io.KeyRelease(int(glfw.KeyEnter))
+	imgui.NewFrame()
+	imgui.EndFrame()
+	// The text window is no longer submitted; the next key belongs to the map.
+	pressSelectionShortcut(glfw.KeyEnter)
+	if g.Placing() || resizeSnapshot(t, e).Revision != 1 {
+		t.Fatal("bare Enter did not confirm paste through registry")
+	}
+	if !ws.Save() {
+		t.Fatal("confirmed paste failed real workspace Save")
+	}
+}
+
+func TestPastePreviewInvalidStartLifecycleGuards(t *testing.T) {
+	for _, end := range []string{"escape", "tool", "tab", "level", "close"} {
+		t.Run(end, func(t *testing.T) {
+			ws, app := newSelectionWorkspace(t)
+			activateSelectionWorkspace(t, ws)
+			e := ws.Map().Editor()
+			before := e.Dmm().Copy()
+			app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+			ws.Map().CanvasState().SetMousePosition(3*32, 0, 1)
+			e.TilePasteSelected()
+			g := tools.Selected().(*tools.ToolGrab)
+			if g.ConfirmPlacement() || !e.HasPastePlacement() {
+				t.Fatal("invalid paste ended or confirmed")
+			}
+			if _, err := e.SaveSnapshot(context.Background()); err == nil {
+				t.Fatal("empty-journal preview allowed Save")
+			}
+			if err := e.RefreshCollaborationSnapshot(context.Background()); err == nil {
+				t.Fatal("empty-journal preview allowed replacement")
+			}
+			if err := e.DetachCollaborationExecutor(context.Background()); err == nil {
+				t.Fatal("empty-journal preview allowed detach")
+			}
+			switch end {
+			case "escape":
+				ws.Map().DoDeselect()
+			case "tool":
+				tools.SetSelected(tools.TNAdd)
+			case "tab":
+				ws.Map().OnDeactivate()
+			case "level":
+				ws.Map().SetActiveLevel(2)
+				e.ProcessCollaborationUpdates()
+			case "close":
+				e.Close()
+			}
+			if e.HasPastePlacement() || !reflect.DeepEqual(e.Dmm().Copy(), before) || app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+				t.Fatal("lifecycle left placement ownership or changed map/history")
+			}
+		})
+	}
+}
+
+func TestPastePreviewOtherCommandsCannotChangeTemplate(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(32, 0, 1)
+	e.TilePasteSelected()
+	before := e.Dmm().Copy()
+	e.InstanceDelete(e.Dmm().Tiles[1].Instances()[2])
+	e.TileCutSelected()
+	e.TileDelete(util.Point{X: 2, Y: 1, Z: 1})
+	e.CommitOperation("unrelated command")
+	if !reflect.DeepEqual(e.Dmm().Copy(), before) || app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+		t.Fatal("another command changed or committed unfinished paste")
+	}
+	tools.Selected().(*tools.ToolGrab).CancelPlacement()
+}
+
+func TestPastePreviewNetworkOutcomes(t *testing.T) {
+	for _, accept := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reject", true: "accept"}[accept], func(t *testing.T) {
+			ws, app := newSelectionWorkspace(t)
+			activateSelectionWorkspace(t, ws)
+			network, transport, document := selectionNetwork(t, ws)
+			e := ws.Map().Editor()
+			before := document.Snapshot()
+			app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}})
+			ws.Map().CanvasState().SetMousePosition(32, 0, 1)
+			e.TilePasteSelected()
+			select {
+			case <-transport.sent:
+				t.Fatal("preview sent a durable operation")
+			default:
+			}
+			g := tools.Selected().(*tools.ToolGrab)
+			if !g.ConfirmPlacement() {
+				t.Fatal("paste did not confirm")
+			}
+			op := transport.next(t)
+			if len(op.Changes) != 1 || op.Changes[0].Coord.X != 2 {
+				t.Fatal("paste did not submit exact destination")
+			}
+			if accept {
+				acceptSelection(t, network, document, op)
+			} else {
+				receiveSelection(t, network, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: op.OperationID, Code: "precondition_failed", Message: "forced paste conflict", Revision: before.Revision, MapHash: resizeHash(t, before)})
+			}
+			runSelectionJob(t, app)
+			e.ProcessCollaborationUpdates()
+			if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, document.Snapshot()) {
+				t.Fatal("paste outcome diverged from authority")
+			}
+			if app.commands.HasUndoV(e.Dmm().Path.Absolute) != accept {
+				t.Fatal("wrong paste history outcome")
+			}
+			if !accept && (g.HasSelectedArea() || len(network.Conflicts()) != 1) {
+				t.Fatal("rejected paste kept selection or lost conflict")
+			}
+			if accept {
+				app.commands.UndoV(e.Dmm().Path.Absolute)
+				acceptSelection(t, network, document, transport.next(t))
+				runSelectionJob(t, app)
+				if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) {
+					t.Fatal("network paste undo did not restore original hash")
+				}
+			}
+		})
+	}
+}
+
+func TestPastePreviewConfirmationAndCancellation(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	before := resizeSnapshot(t, e)
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(32, 0, 1)
+	e.TilePasteSelected()
+	g := tools.Selected().(*tools.ToolGrab)
+	if !g.Placing() || g.Stale() {
+		t.Fatal("paste did not start placement")
+	}
+	if _, err := e.SaveSnapshot(context.Background()); err == nil || e.CanChangeMapSize() {
+		t.Fatal("open placement permits Save/resize")
+	}
+	id := e.Dmm().Tiles[1].Instances()[2].StableID()
+	e.TilePasteSelected()
+	if e.Dmm().Tiles[1].Instances()[2].StableID() != id {
+		t.Fatal("repeated Paste replaced template")
+	}
+	g.CancelPlacement()
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) || app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+		t.Fatal("cancel changed authority/history")
+	}
+	e.TilePasteSelected()
+	g.UpdatePlacement(util.Point{X: 3, Y: 1, Z: 1})
+	id = e.Dmm().Tiles[2].Instances()[2].StableID()
+	if !g.ConfirmPlacement() || g.Placing() {
+		t.Fatal("valid placement did not confirm")
+	}
+	after := resizeSnapshot(t, e)
+	if after.Revision != before.Revision+1 || id == string(before.Tiles[0].State.Prefabs[2].StableID) {
+		t.Fatal("paste did not create one distinct operation")
+	}
+	app.commands.UndoV(e.Dmm().Path.Absolute)
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) {
+		t.Fatal("paste undo changed original hash")
+	}
+	app.commands.RedoV(e.Dmm().Path.Absolute)
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, after) || e.Dmm().Tiles[2].Instances()[2].StableID() != id {
+		t.Fatal("paste redo changed pasted identity/hash")
+	}
+}
+
+func TestPastePreviewPreservesHiddenDestinationIdentity(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	filter := dm.NewPathsFilterEmpty()
+	filter.TogglePath("/area/foo")
+	app.Clipboard().Copy(filter, e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}})
+	destination := util.Point{X: 2, Y: 1, Z: 1}
+	hiddenID := e.Dmm().GetTile(destination).Instances()[0].StableID()
+	ws.Map().CanvasState().SetMousePosition(32, 0, 1)
+	e.TilePasteSelected()
+	if got := e.Dmm().GetTile(destination).Instances()[0].StableID(); got != hiddenID {
+		t.Fatal("paste replaced the hidden destination instance identity")
+	}
+}
+
+func TestPastePreviewDoesNotClipAtMapEdge(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+	before := e.Dmm().Copy()
+	ws.Map().CanvasState().SetMousePosition(3*32, 0, 1)
+	e.TilePasteSelected()
+	if !reflect.DeepEqual(e.Dmm().Copy(), before) {
+		t.Fatal("paste clipped the template and changed only its in-bounds portion")
+	}
+}

@@ -8,6 +8,9 @@ import (
 )
 
 func (m *Menu) addShortcuts() {
+	// APHELION EDIT ADDITION START - SHORTCUT REFERENCE
+	m.shortcuts.Add(shortcut.Shortcut{Name: "menu#showHotkeys", FirstKey: glfw.KeyF1, Action: m.openShortcutReference})
+	// APHELION EDIT ADDITION END
 	m.shortcuts.Add(shortcut.Shortcut{
 		Name:        "menu#DoNewWorkspace",
 		FirstKey:    platform.KeyModLeft(),

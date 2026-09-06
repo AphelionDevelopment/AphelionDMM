@@ -1,0 +1,260 @@
+package wsmap
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"github.com/SpaiR/imgui-go"
+	"github.com/go-gl/glfw/v3.3/glfw"
+	"sdmm/internal/aphelion/collab/protocol"
+	"sdmm/internal/app/ui/cpwsarea/wsmap/tools"
+	"sdmm/internal/app/ui/shortcut"
+	"sdmm/internal/dmapi/dm"
+	"sdmm/internal/util"
+)
+
+func TestPasteTransformShortcutsBeforeConfirmation(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	before := resizeSnapshot(t, e)
+	filter := dm.NewPathsFilterEmpty()
+	filter.TogglePath("/area/foo")
+	app.Clipboard().Copy(filter, e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+	clipboard := app.Clipboard().Buffer().Buffer[0].Copy()
+	ws.Map().CanvasState().SetMousePosition(32, 32, 1)
+	e.TilePasteSelected()
+	g := tools.Selected().(*tools.ToolGrab)
+	id := e.Dmm().GetTile(util.Point{X: 2, Y: 2, Z: 1}).Instances()[2].StableID()
+	hiddenID := e.Dmm().GetTile(util.Point{X: 2, Y: 3, Z: 1}).Instances()[0].StableID()
+	pressSelectionShortcut(glfw.KeyRightBracket)
+	if !g.Placing() || g.Bounds() != (util.Bounds{X1: 2, Y1: 2, X2: 2, Y2: 3}) {
+		t.Fatal("rotation shortcut did not rotate the floating template")
+	}
+	rotated := e.Dmm().GetTile(util.Point{X: 2, Y: 3, Z: 1}).Instances()[2]
+	if rotated.StableID() != id || rotated.Prefab().Vars().ValueV("dir", "") != "8" {
+		t.Fatal("rotation changed identity or failed to rotate direction")
+	}
+	pressSelectionShortcut(glfw.KeyV)
+	if got := e.Dmm().GetTile(util.Point{X: 2, Y: 2, Z: 1}).Instances()[2]; got.StableID() != id {
+		t.Fatal("vertical mirror did not exchange template cells")
+	}
+	pressSelectionShortcut(glfw.KeyH)
+	if got := e.Dmm().GetTile(util.Point{X: 2, Y: 2, Z: 1}).Instances()[2]; got.Prefab().Vars().ValueV("dir", "") != "4" {
+		t.Fatal("horizontal mirror did not reflect orientation")
+	}
+	if app.commands.HasUndoV(e.Dmm().Path.Absolute) || !reflect.DeepEqual(clipboard, app.Clipboard().Buffer().Buffer[0].Copy()) {
+		t.Fatal("preview transform created history or changed clipboard")
+	}
+	if e.Dmm().GetTile(util.Point{X: 2, Y: 3, Z: 1}).Instances()[0].StableID() != hiddenID {
+		t.Fatal("transform replaced hidden destination identity")
+	}
+	pressSelectionShortcut(glfw.KeyEnter)
+	after := resizeSnapshot(t, e)
+	if g.Placing() || after.Revision != before.Revision+1 || !ws.Save() {
+		t.Fatal("transformed paste did not confirm as one saveable revision")
+	}
+	app.commands.UndoV(e.Dmm().Path.Absolute)
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) {
+		t.Fatal("transformed paste undo did not restore exact original hash")
+	}
+	app.commands.RedoV(e.Dmm().Path.Absolute)
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, after) {
+		t.Fatal("transformed paste redo changed hash or identities")
+	}
+}
+
+func TestPasteTransformNetworkOutcomes(t *testing.T) {
+	for _, accept := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reject", true: "accept"}[accept], func(t *testing.T) {
+			ws, app := newSelectionWorkspace(t)
+			activateSelectionWorkspace(t, ws)
+			network, transport, document := selectionNetwork(t, ws)
+			e := ws.Map().Editor()
+			before := document.Snapshot()
+			app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+			ws.Map().CanvasState().SetMousePosition(32, 32, 1)
+			e.TilePasteSelected()
+			pressSelectionShortcut(glfw.KeyRightBracket)
+			pressSelectionShortcut(glfw.KeyH)
+			select {
+			case <-transport.sent:
+				t.Fatal("floating transform submitted an operation")
+			default:
+			}
+			if _, err := e.SaveSnapshot(context.Background()); err == nil {
+				t.Fatal("transformed preview allowed Save")
+			}
+			g := tools.Selected().(*tools.ToolGrab)
+			if !g.ConfirmPlacement() {
+				t.Fatal("transformed paste did not confirm")
+			}
+			op := transport.next(t)
+			if len(op.Changes) != 2 {
+				t.Fatalf("paste submitted %d changes", len(op.Changes))
+			}
+			for _, change := range op.Changes {
+				if change.Coord.X != 2 || change.Coord.Y < 2 || change.Coord.Y > 3 {
+					t.Fatal("operation included abandoned preview tiles")
+				}
+			}
+			if accept {
+				acceptSelection(t, network, document, op)
+			} else {
+				receiveSelection(t, network, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: op.OperationID, Code: "precondition_failed", Message: "forced transformed paste conflict", Revision: before.Revision, MapHash: resizeHash(t, before)})
+			}
+			runSelectionJob(t, app)
+			e.ProcessCollaborationUpdates()
+			after := document.Snapshot()
+			if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, after) || app.commands.HasUndoV(e.Dmm().Path.Absolute) != accept {
+				t.Fatal("transformed paste outcome disagrees with authority/history")
+			}
+			if !accept && (g.HasSelectedArea() || len(network.Conflicts()) != 1) {
+				t.Fatal("rejection retained selection or lost conflict")
+			}
+			if accept {
+				app.commands.UndoV(e.Dmm().Path.Absolute)
+				acceptSelection(t, network, document, transport.next(t))
+				runSelectionJob(t, app)
+				if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) {
+					t.Fatal("network undo did not restore exact map")
+				}
+				app.commands.RedoV(e.Dmm().Path.Absolute)
+				acceptSelection(t, network, document, transport.next(t))
+				runSelectionJob(t, app)
+				if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, after) {
+					t.Fatal("network redo changed pasted IDs or orientation")
+				}
+			}
+		})
+	}
+}
+
+func TestPasteTransformTextModifiersAndLevelCancellation(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	before := e.Dmm().Copy()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(32, 32, 1)
+	e.TilePasteSelected()
+	preview := e.Dmm().Copy()
+	for _, pair := range [][2]glfw.Key{{glfw.KeyLeftControl, glfw.KeyRightBracket}, {glfw.KeyRightAlt, glfw.KeyH}, {glfw.KeyLeftShift, glfw.KeyV}} {
+		pressSelectionShortcut(pair[0], pair[1])
+		if !reflect.DeepEqual(preview, e.Dmm().Copy()) {
+			t.Fatal("modified shortcut transformed preview")
+		}
+	}
+	io := imgui.CurrentIO()
+	input := "typing"
+	keys := []glfw.Key{glfw.KeyLeftBracket, glfw.KeyRightBracket, glfw.KeyH, glfw.KeyV}
+	for frame := 0; frame < len(keys)+2; frame++ {
+		if frame >= 2 {
+			io.KeyPress(int(keys[frame-2]))
+		}
+		imgui.NewFrame()
+		imgui.Begin("Paste transform input")
+		if frame == 0 {
+			imgui.SetKeyboardFocusHere()
+		}
+		imgui.InputText("Value", &input)
+		if frame >= 2 {
+			if !imgui.IsAnyItemActive() {
+				t.Fatal("text fixture was not active")
+			}
+			shortcut.Process()
+			if !reflect.DeepEqual(preview, e.Dmm().Copy()) {
+				t.Fatal("text entry transformed preview")
+			}
+		}
+		imgui.End()
+		imgui.EndFrame()
+		if frame >= 2 {
+			io.KeyRelease(int(keys[frame-2]))
+		}
+	}
+	imgui.NewFrame()
+	imgui.EndFrame()
+	pressSelectionShortcut(glfw.KeyRightBracket)
+	if tools.Selected().(*tools.ToolGrab).Bounds().Y2 != 3 {
+		t.Fatal("rotation did not resume after text input")
+	}
+	ws.Map().SetActiveLevel(2)
+	e.ProcessCollaborationUpdates()
+	pressSelectionShortcut(glfw.KeyH)
+	if e.HasPastePlacement() || !reflect.DeepEqual(before, e.Dmm().Copy()) || app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+		t.Fatal("level switch left transformed preview or stale shortcut mutation")
+	}
+}
+
+func TestPasteTransformRepairsInvalidTargetAndCancels(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	e := ws.Map().Editor()
+	before := e.Dmm().Copy()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(3*32, 0, 1)
+	e.TilePasteSelected()
+	g := tools.Selected().(*tools.ToolGrab)
+	if g.PlacementError() == nil {
+		t.Fatal("fixture must initially be out of bounds")
+	}
+	pressSelectionShortcut(glfw.KeyLeftBracket)
+	if g.PlacementError() != nil || g.Bounds() != (util.Bounds{X1: 4, Y1: 1, X2: 4, Y2: 2}) {
+		t.Fatal("rotation did not fit previously invalid target")
+	}
+	preview := e.Dmm().Copy()
+	pressSelectionShortcut(glfw.KeyLeftBracket)
+	if g.PlacementError() == nil || g.ConfirmPlacement() || !reflect.DeepEqual(preview, e.Dmm().Copy()) {
+		t.Fatal("invalid rotation changed or confirmed the displayed preview")
+	}
+	pressSelectionShortcut(glfw.KeyEscape)
+	if g.Placing() || !reflect.DeepEqual(before, e.Dmm().Copy()) || app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+		t.Fatal("cancelled transformed preview changed map/history")
+	}
+}
+
+func TestPasteTransformCaptureFaultKeepsSaveGuardUntilRecovery(t *testing.T) {
+	ws, app := newSelectionWorkspace(t)
+	activateSelectionWorkspace(t, ws)
+	network, transport, document := selectionNetwork(t, ws)
+	e := ws.Map().Editor()
+	before := document.Snapshot()
+	app.Clipboard().Copy(dm.NewPathsFilterEmpty(), e.Dmm(), []util.Point{{X: 1, Y: 1, Z: 1}, {X: 2, Y: 1, Z: 1}})
+	ws.Map().CanvasState().SetMousePosition(32, 32, 1)
+	e.TilePasteSelected()
+	invalid := e.Dmm().GetTile(util.Point{X: 2, Y: 3, Z: 1}).Instances()[2]
+	originalID := invalid.StableID()
+	invalid.SetStableID("invalid-transform-destination")
+	display := e.Dmm().Copy()
+	pressSelectionShortcut(glfw.KeyRightBracket)
+	g := tools.Selected().(*tools.ToolGrab)
+	if g.PlacementError() == nil || !reflect.DeepEqual(display, e.Dmm().Copy()) || g.ConfirmPlacement() {
+		t.Fatal("capture fault changed or confirmed preview")
+	}
+	invalid.SetStableID(originalID)
+	display = e.Dmm().Copy()
+	pressSelectionShortcut(glfw.KeyH)
+	if g.PlacementError() == nil || !reflect.DeepEqual(display, e.Dmm().Copy()) {
+		t.Fatal("another transform bypassed the capture fault")
+	}
+	pressSelectionShortcut(glfw.KeyEscape)
+	if _, err := e.SaveSnapshot(context.Background()); err == nil {
+		t.Fatal("cancel cleared latched Save fault")
+	}
+	if app.commands.HasUndoV(e.Dmm().Path.Absolute) {
+		t.Fatal("fault created history")
+	}
+	select {
+	case <-transport.sent:
+		t.Fatal("fault submitted durable data")
+	default:
+	}
+	if err := e.AttachCollaborationExecutor(network); err != nil {
+		t.Fatalf("transform retained captures blocking recovery: %v", err)
+	}
+	if resizeHash(t, resizeSnapshot(t, e)) != resizeHash(t, before) || !ws.Save() {
+		t.Fatal("validated recovery failed exact original save")
+	}
+}

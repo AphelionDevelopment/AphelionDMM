@@ -22,7 +22,8 @@ type editor interface {
 	// APHELION EDIT ADDITION END
 
 	Dmm() *dmmap.Dmm
-	CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ int)
+	// APHELION EDIT CHANGE - LOCAL RESIZE - ORIGINAL: CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ int)
+	ResizeMap(maxX, maxY, maxZ int) error
 }
 
 type Panel struct {
@@ -30,7 +31,10 @@ type Panel struct {
 
 	editor editor
 
-	sessionMapSize    *sessionMapSize
+	sessionMapSize *sessionMapSize
+	// APHELION EDIT ADDITION START - LOCAL RESIZE
+	mapSizeError string
+	// APHELION EDIT ADDITION END
 	sessionScreenshot *sessionScreenshot
 }
 

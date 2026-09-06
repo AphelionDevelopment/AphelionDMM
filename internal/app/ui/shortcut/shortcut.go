@@ -53,6 +53,9 @@ func (s Shortcut) weight() int {
 }
 
 func (s Shortcut) isPressed() bool {
+	// APHELION EDIT ADDITION START - SHORTCUT MATCHING
+	return pressedExact(s)
+	/* APHELION EDIT REMOVAL START - SHORTCUT MATCHING
 	if s.SecondKey == 0 && s.ThirdKey == 0 {
 		if imgui.IsKeyPressed(int(s.FirstKey)) || imgui.IsKeyPressed(int(s.FirstKeyAlt)) {
 			return true
@@ -72,6 +75,8 @@ func (s Shortcut) isPressed() bool {
 	}
 
 	return s.ThirdKey != 0 && (imgui.IsKeyPressed(int(s.ThirdKey)) || imgui.IsKeyPressed(int(s.ThirdKeyAlt)))
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION END
 }
 
 var shortcuts []*Shortcut

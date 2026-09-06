@@ -109,6 +109,10 @@ type Menu struct {
 	app app
 
 	shortcuts shortcut.Shortcuts
+	// APHELION EDIT ADDITION START - SHORTCUT REFERENCE
+	showHotkeys  bool
+	hotkeyFilter string
+	// APHELION EDIT ADDITION END
 
 	updateStatus      upStatus
 	updateVersion     string
@@ -281,6 +285,10 @@ func (m *Menu) Process() {
 		}),
 
 		w.Menu("Help", w.Layout{
+			// APHELION EDIT ADDITION START - SHORTCUT REFERENCE
+			w.MenuItem("Keyboard Shortcuts", m.openShortcutReference).Shortcut("F1").IconEmpty(),
+			w.Separator(),
+			// APHELION EDIT ADDITION END
 			w.MenuItem("Changelog", m.app.DoOpenChangelog).
 				Icon(icon.ClipboardMultiple),
 			w.MenuItem("Source Code", m.app.DoOpenSourceCode).
@@ -306,6 +314,11 @@ func (m *Menu) Process() {
 			}
 		}),
 	}).Build()
+	// APHELION EDIT ADDITION START - SHORTCUT REFERENCE
+	if m.showHotkeys {
+		m.showShortcutReference()
+	}
+	// APHELION EDIT ADDITION END
 }
 
 func (m *Menu) SetUpdateAvailable(version, description string) {

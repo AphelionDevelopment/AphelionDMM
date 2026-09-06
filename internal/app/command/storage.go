@@ -18,6 +18,12 @@ func NewStorage() *Storage {
 }
 
 func (s *Storage) Free() {
+	// APHELION EDIT ADDITION START - HISTORY LIFETIME
+	for _, stack := range s.commandStacks {
+		stack.clear()
+	}
+	s.currentStackId = ""
+	// APHELION EDIT ADDITION END
 	s.commandStacks = make(map[string]*commandStack, len(s.commandStacks))
 	s.SetStack(NullSpaceStackId)
 	log.Print("storage free")
@@ -44,6 +50,11 @@ func (s *Storage) DisposeStack(id string) {
 	}
 
 	log.Print("disposing stack:", id)
+	// APHELION EDIT ADDITION START - HISTORY LIFETIME
+	if stack := s.commandStacks[id]; stack != nil {
+		stack.clear()
+	}
+	// APHELION EDIT ADDITION END
 	delete(s.commandStacks, id)
 	if s.currentStackId == id {
 		s.SetStack(NullSpaceStackId)
@@ -57,14 +68,85 @@ func (s *Storage) Push(command Command) {
 	}
 
 	if stack, ok := s.commandStacks[s.currentStackId]; ok {
+		/* APHELION EDIT REMOVAL START - HISTORY LIFETIME
 		logStackAction(stack, "push command: "+command.name)
 		stack.undo = append(stack.undo, command)
 		stack.redo = stack.redo[:0]
 		stack.balance++
+		APHELION EDIT REMOVAL END */
+		// APHELION EDIT ADDITION START - HISTORY LIFETIME
+		stack.push(command)
+		// APHELION EDIT ADDITION END
 	} else {
 		logNoStackAvailable("push command")
 	}
 }
+
+// APHELION EDIT ADDITION START - HISTORY LIFETIME
+// Target binds commands to one map's stack lifetime. Like Storage, it is owned
+// by the UI thread. Switching tabs does not change the target; disposing a stack
+// invalidates it even when a new map later uses the same stack ID.
+type Target struct {
+	storage *Storage
+	stack   *commandStack
+}
+
+// Bind obtains a history target without changing the active undo/redo stack.
+func (s *Storage) Bind(id string) Target {
+	if s == nil || id == "" || id == NullSpaceStackId {
+		return Target{}
+	}
+	if s.commandStacks[id] == nil {
+		s.commandStacks[id] = &commandStack{id: id}
+	}
+	return Target{storage: s, stack: s.commandStacks[id]}
+}
+
+func (target Target) Valid() bool {
+	return target.storage != nil && target.stack != nil && target.storage.commandStacks[target.stack.id] == target.stack
+}
+
+// Push returns false after disposal and never recreates a discarded stack.
+func (target Target) Push(command Command) bool {
+	if !target.Valid() {
+		return false
+	}
+	target.stack.push(command)
+	return true
+}
+
+func (stack *commandStack) push(command Command) {
+	if stack.busy {
+		logStackAction(stack, "queue command: "+command.name)
+		stack.queued = append(stack.queued, command)
+		return
+	}
+	logStackAction(stack, "push command: "+command.name)
+	stack.undo = append(stack.undo, command)
+	clear(stack.redo)
+	stack.redo = stack.redo[:0]
+	stack.balance++
+}
+
+// An accepted edit may arrive while a history operation is awaiting its
+// acknowledgement. Finish that transition before inserting the new branch.
+func (stack *commandStack) flushQueued() {
+	for _, command := range stack.queued {
+		stack.push(command)
+	}
+	clear(stack.queued)
+	stack.queued = stack.queued[:0]
+}
+
+func (stack *commandStack) clear() {
+	clear(stack.undo[:cap(stack.undo)])
+	clear(stack.redo[:cap(stack.redo)])
+	clear(stack.queued[:cap(stack.queued)])
+	stack.undo, stack.redo = nil, nil
+	stack.queued = nil
+}
+
+// APHELION EDIT ADDITION END
 
 /* APHELION EDIT REMOVAL START - COLLABORATION
 func (s *Storage) Undo() {
@@ -106,13 +188,22 @@ func (s *Storage) UndoAsyncV(id string, complete func(error)) bool {
 	}
 	command := stack.undo[len(stack.undo)-1]
 	stack.busy = true
+	finished := false
 	command.RunAsync(func(reversed Command, err error) {
-		stack.busy = false
+		if finished {
+			return
+		}
+		finished = true
 		current, exists := s.commandStacks[id]
 		if err == nil && exists && current == stack && len(stack.undo) > 0 && stack.undo[len(stack.undo)-1].id == command.id {
+			stack.undo[len(stack.undo)-1] = Command{}
 			stack.undo = stack.undo[:len(stack.undo)-1]
 			stack.redo = append(stack.redo, reversed)
 			stack.balance--
+		}
+		stack.busy = false
+		if exists && current == stack {
+			stack.flushQueued()
 		}
 		if complete != nil {
 			complete(err)
@@ -124,8 +215,15 @@ func (s *Storage) UndoAsyncV(id string, complete func(error)) bool {
 // APHELION EDIT ADDITION END
 
 func (s *Storage) undo(stack *commandStack) {
+	/* APHELION EDIT REMOVAL START - HISTORY LIFETIME
 	var command Command
 	command, stack.undo = stack.undo[len(stack.undo)-1], stack.undo[:len(stack.undo)-1]
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION START - HISTORY LIFETIME
+	command := stack.undo[len(stack.undo)-1]
+	stack.undo[len(stack.undo)-1] = Command{}
+	stack.undo = stack.undo[:len(stack.undo)-1]
+	// APHELION EDIT ADDITION END
 	stack.redo = append(stack.redo, command.Run())
 	stack.balance--
 }
@@ -170,13 +268,22 @@ func (s *Storage) RedoAsyncV(id string, complete func(error)) bool {
 	}
 	command := stack.redo[len(stack.redo)-1]
 	stack.busy = true
+	finished := false
 	command.RunAsync(func(reversed Command, err error) {
-		stack.busy = false
+		if finished {
+			return
+		}
+		finished = true
 		current, exists := s.commandStacks[id]
 		if err == nil && exists && current == stack && len(stack.redo) > 0 && stack.redo[len(stack.redo)-1].id == command.id {
+			stack.redo[len(stack.redo)-1] = Command{}
 			stack.redo = stack.redo[:len(stack.redo)-1]
 			stack.undo = append(stack.undo, reversed)
 			stack.balance++
+		}
+		stack.busy = false
+		if exists && current == stack {
+			stack.flushQueued()
 		}
 		if complete != nil {
 			complete(err)
@@ -188,8 +295,15 @@ func (s *Storage) RedoAsyncV(id string, complete func(error)) bool {
 // APHELION EDIT ADDITION END
 
 func (s *Storage) redo(stack *commandStack) {
+	/* APHELION EDIT REMOVAL START - HISTORY LIFETIME
 	var command Command
 	command, stack.redo = stack.redo[len(stack.redo)-1], stack.redo[:len(stack.redo)-1]
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION START - HISTORY LIFETIME
+	command := stack.redo[len(stack.redo)-1]
+	stack.redo[len(stack.redo)-1] = Command{}
+	stack.redo = stack.redo[:len(stack.redo)-1]
+	// APHELION EDIT ADDITION END
 	stack.undo = append(stack.undo, command.Run())
 	stack.balance++
 }
@@ -220,7 +334,8 @@ func (s *Storage) HasRedoV(id string) bool {
 
 func (s *Storage) IsModified(id string) bool {
 	if stack, ok := s.commandStacks[id]; ok {
-		return stack.balance != 0 || stack.appliedCommandId() != stack.balanceCommandId
+		// APHELION EDIT CHANGE - HISTORY ORDERING - ORIGINAL: return stack.balance != 0 || stack.appliedCommandId() != stack.balanceCommandId
+		return stack.busy || stack.balance != 0 || stack.appliedCommandId() != stack.balanceCommandId
 	}
 	return false
 }
@@ -247,10 +362,12 @@ func (s *Storage) Balance(id string) {
 	if stack, ok := s.commandStacks[id]; ok {
 		logStackAction(stack, "balance")
 		// APHELION EDIT ADDITION START - COLLABORATION
-		for _, command := range append(stack.undo, stack.redo...) {
-			if command.undoAsync != nil || command.redoAsync != nil {
-				log.Print("skip balancing asynchronous command stack")
-				return
+		for _, commands := range [][]Command{stack.undo, stack.redo} {
+			for _, command := range commands {
+				if command.undoAsync != nil || command.redoAsync != nil {
+					log.Print("skip balancing asynchronous command stack")
+					return
+				}
 			}
 		}
 		// APHELION EDIT ADDITION END
@@ -281,7 +398,8 @@ type commandStack struct {
 	undo    []Command
 	redo    []Command
 	// APHELION EDIT ADDITION START - COLLABORATION
-	busy bool
+	busy   bool
+	queued []Command
 	// APHELION EDIT ADDITION END
 
 	// Field stores a command id at the moment when the stack was forcefully balanced.
@@ -290,7 +408,8 @@ type commandStack struct {
 
 func (c commandStack) appliedCommandId() uint64 {
 	if len(c.undo) > 0 {
-		return c.undo[0].id
+		// APHELION EDIT CHANGE - HISTORY ORDERING - ORIGINAL: return c.undo[0].id
+		return c.undo[len(c.undo)-1].id
 	}
 	return 0
 }

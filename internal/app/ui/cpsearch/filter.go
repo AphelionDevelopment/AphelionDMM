@@ -97,12 +97,20 @@ func (s *Search) fetchGrabToolFilterBounds() {
 }
 
 func (s *Search) doResetFilter() {
-	s.resultsFiltered = s.resultsFiltered[:0]
+	// APHELION EDIT CHANGE - SEARCH RETENTION - ORIGINAL: s.resultsFiltered = s.resultsFiltered[:0]
+	s.resultsFiltered = nil
+	// APHELION EDIT ADDITION START - SEARCH QUERY LIFECYCLE
+	s.resetResultNavigation()
+	// APHELION EDIT ADDITION END
 	s.filterBound = util.Bounds{}
 	log.Print("search filter reset")
 }
 
 func (s *Search) updateFilteredResults() {
+	// APHELION EDIT ADDITION START - SEARCH QUERY LIFECYCLE
+	clear(s.resultsFiltered)
+	s.resetResultNavigation()
+	// APHELION EDIT ADDITION END
 	s.resultsFiltered = s.resultsFiltered[:0]
 	for _, result := range s.resultsAll {
 		if s.filterBound.Contains(float32(result.Coord().X), float32(result.Coord().Y)) {

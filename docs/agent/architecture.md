@@ -32,9 +32,39 @@ Important existing seams include:
 `Editor.CommitOperation` captures explicit before/after tile changes. Network
 completion callbacks are scheduled on the UI thread and fenced by attachment
 generation. An older acknowledgement does not clear a newer open gesture.
+Selection preflight owns only the before-states it acquires. Failed batches
+release those entries before any display mutation; cancelled moves restore and
+release their backgrounds without committing unrelated edits. A new destination
+with a separate pending edit is refused. Invalid capture remains a Save fault
+until validated replacement; cleanup does not reset the attachment or its pending
+acknowledgements. See the
+[capture/cancellation verification](../verification/2026-09-06-selection-capture-and-cancellation.md).
 `WsMap.Save` refuses unfinished gestures/submissions, captures the executor's
 acknowledged state, and reports staging or replacement failures. Close dialogs
 honor that result. The mutable display map is not the save authority.
+
+`Editor.ResizeMap` stages local maintenance before changing authority/display.
+Each size has a distinct local document identity and retained local executor, so
+undo/redo can resume its edit history and stable IDs. Current/target boundary
+hashes must match before installation. A separate history-generation key permits
+that local resumption; asynchronous attachment generations never rewind. External
+attach/detach/close replaces history ownership. Network resize remains unavailable
+until the approved owner-only maintenance protocol is implemented. See the
+[local resize verification](../verification/2026-09-06-local-resize-and-history.md)
+for exact evidence and remaining performance/acceptance limits.
+
+Each editor binds its command history to the map's existing stack ID and stack
+lifetime at construction. A tab switch cannot redirect a delayed acknowledgement
+or local resize into another map's history. Disposal invalidates the binding even
+if the same path is reopened. Popped/discarded commands release captured state;
+live history and in-flight callbacks still retain the state they need. See the
+[history audit](../verification/2026-09-06-map-history-ownership-and-retention.md).
+During pending undo/redo, new accepted edits queue their local history insertion.
+Completion finishes the original transition once, then inserts the new branch
+in order. Saved-state identity follows the latest applied command; pending history
+is modified. Durable edits continue through the executor and Save/close retains
+its independent authority checks. See the
+[ordering/Save verification](../verification/2026-09-06-history-ordering-and-save.md).
 
 ## Target boundaries
 
@@ -77,6 +107,14 @@ New Aphelion-owned packages:
 
 Each open document has one authoritative mutation loop. It serializes durable operations and owns the current revision. Network readers, presence updates, persistence, rendering, and telemetry may run concurrently, but they cannot mutate authoritative document state directly.
 
+Engine branches share private immutable snapshot and accepted-operation payloads.
+Each branch owns its mutable history maps; validation copies the tile table before
+replacing or appending states. Public inputs, outputs and changed tile states are
+deep copies. Recovery preserves the same ownership boundary. This reduces
+transaction-copy cost without making a single Document safe for concurrent
+mutation or changing the server's append-before-publication requirement. See the
+[engine-copy verification](../verification/2026-09-06-engine-copy-performance.md).
+
 Private `SessionStore.LoadRecovery` returns the snapshot, retained operations,
 revision hashes, and durable head. Recovery verifies them and restores inverse
 targets and historical bases, including operations compacted out of public
@@ -85,6 +123,55 @@ retains full history and has a measurement-backed scaling investigation in the
 2026-09-05 performance audit; no bounded-history optimization is implemented.
 
 The UI thread remains the only owner of OpenGL/ImGui work. Applied operations produce immutable render invalidations that are scheduled onto the UI thread.
+
+Clipboard placement reuses the owned Move preview lifecycle and the same local/
+network operation engine. The application Paste action starts a preview; it no
+longer commits immediately. The tool retains its originating editor, assigns
+copied IDs once, and restores/releases only owned destination backgrounds.
+Save and competing edits remain guarded until confirmation or cancellation.
+Floating rotation/mirroring builds a sparse candidate template, validates all
+orientations, then reuses Move's capture-before-restore transaction. Failure
+leaves the previous template/display intact. Only final placement submits an
+operation; transformed templates preserve clipboard independence and copied IDs.
+The [paste-transform report](../verification/2026-09-06-paste-transforms.md)
+records actual shortcut, cancellation, fault and local/network history evidence,
+plus selected-size model costs without claiming desktop latency improvements.
+Preview refresh now restores only passed-over tiles before rebuilding owned
+tiles from captured backgrounds; cancellation and return-to-origin still restore
+everything. Hidden display instances remain copies, preserving snapshot isolation.
+The [preview-copy audit](../verification/2026-09-06-preview-copy-performance.md)
+records profile attribution, matched display hashes, allocation savings and mixed
+timing results for ordinary Grab movement and floating rotation.
+The [application routing and canvas audit](../verification/2026-09-06-canvas-resize-and-application-routing.md)
+qualifies shortcut dispatch and workspace focus with a real hidden UI context.
+It also removes the redundant CPU canvas-resize upload: texture allocation uses
+nil data followed by the existing full framebuffer clear before drawing. Its
+pixel-equivalence and synchronized blank-resize measurements do not replace
+representative map, GPU-memory or human-interaction qualification.
+
+Search queries use the owned `internal/aphelion/search` helper for a single map
+traversal, preserving prefab grouping and tile/instance order. Results reference
+current display instances and are not a persistent index. The inherited search
+panel clips rows, computes focused-result scrolling before clipping, and stops
+iteration when its result generation changes. Free releases result references;
+filter changes reset navigation. Search's result generation remains local to the
+panel. A separate `Editor.MapViewVersion` fences its cached instance pointers
+across local edits, snapshot replacement, resize/history and attachment changes.
+Queries rebuild once when invalidated and ready; unfinished gestures defer them.
+Automatic same-map refresh retains filter bounds. Stale row/bulk actions refresh
+without retargeting their old indices. `CanStartMapEdit` fences mutations, and
+`CommitInstanceBatch` verifies membership and captures all targets before display
+changes. It also validates the shared replacement through a temporary capture
+before installation, rejecting an empty path or missing variable data. Failed
+preflight releases only its captures; target-capture faults retain the map guard,
+while an invalid selected replacement leaves the unchanged map usable. Later
+snapshot-read failures retain valid entered intent for explicit retry. See the
+[after-value qualification](../verification/2026-09-06-search-after-values-and-stopping-point.md).
+Accepted operations and actor-scoped history keep their existing owners. See the
+[ownership/capture qualification](../verification/2026-09-06-search-ownership.md)
+and the earlier
+[search verification](../verification/2026-09-06-search-performance.md) for exact
+query/draw equivalence, allocation tradeoffs and remaining action-lifecycle gates.
 
 ## Deployment modes
 

@@ -756,7 +756,7 @@ func editorTestMap(environment *dmenv.Dme) *dmmap.Dmm {
 	for _, prefab := range prefabs {
 		tile.InstancesAdd(prefab)
 	}
-	return &dmmap.Dmm{MaxX: 1, MaxY: 1, MaxZ: 1, Tiles: []*dmmap.Tile{tile}}
+	return &dmmap.Dmm{Path: dmmap.DmmPath{Absolute: "test"}, MaxX: 1, MaxY: 1, MaxZ: 1, Tiles: []*dmmap.Tile{tile}}
 }
 
 func assertEditorDirection(t *testing.T, mapState *dmmap.Dmm, want string) {

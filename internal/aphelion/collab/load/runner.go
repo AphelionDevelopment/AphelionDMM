@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -45,6 +46,8 @@ type acceptedEvent struct {
 }
 
 func Run(ctx context.Context, config RunConfig, scenario Scenario) (Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if err := validateRunConfig(config); err != nil {
 		return Result{}, err
 	}
@@ -76,10 +79,13 @@ func Run(ctx context.Context, config RunConfig, scenario Scenario) (Result, erro
 		}
 	}
 	connections := make([]*websocket.Conn, 0, len(tokens))
+	var readers sync.WaitGroup
 	defer func() {
+		cancel()
 		for _, connection := range connections {
-			_ = connection.Close(websocket.StatusNormalClosure, "load scenario complete")
+			_ = connection.CloseNow()
 		}
+		readers.Wait()
 	}()
 	accepted := make(chan acceptedEvent, len(tokens)*2)
 	readErrors := make(chan error, len(tokens))
@@ -89,7 +95,8 @@ func Run(ctx context.Context, config RunConfig, scenario Scenario) (Result, erro
 			return Result{}, err
 		}
 		connections = append(connections, connection)
-		go readLoadEvents(ctx, index, connection, accepted, readErrors)
+		readers.Add(1)
+		go func() { defer readers.Done(); readLoadEvents(ctx, index, connection, accepted, readErrors) }()
 	}
 	latencies := make([]time.Duration, 0, len(scenario.Operations))
 	for index, operation := range scenario.Operations {
@@ -284,23 +291,37 @@ func connectEditor(ctx context.Context, config RunConfig, token string) (*websoc
 	return connection, nil
 }
 
-func readLoadEvents(ctx context.Context, client int, connection *websocket.Conn, accepted chan<- acceptedEvent, readErrors chan<- error) {
+type loadReader interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+}
+
+func readLoadEvents(ctx context.Context, client int, connection loadReader, accepted chan<- acceptedEvent, readErrors chan<- error) {
 	for {
 		_, data, err := connection.Read(ctx)
 		if err != nil {
 			if ctx.Err() == nil && websocket.CloseStatus(err) != websocket.StatusNormalClosure {
-				readErrors <- err
+				select {
+				case readErrors <- err:
+				case <-ctx.Done():
+				}
 			}
 			return
 		}
 		message, err := protocol.DecodeServer(data)
 		if err != nil {
-			readErrors <- err
+			select {
+			case readErrors <- err:
+			case <-ctx.Done():
+			}
 			return
 		}
 		if message.Envelope.Type == protocol.ServerOperationAccepted {
 			operation := message.Payload.(*protocol.OperationAcceptedPayload).Operation
-			accepted <- acceptedEvent{client: client, operationID: operation.OperationID}
+			select {
+			case accepted <- acceptedEvent{client: client, operationID: operation.OperationID}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }

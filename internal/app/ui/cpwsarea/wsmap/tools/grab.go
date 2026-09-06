@@ -2,6 +2,9 @@ package tools
 
 import (
 	"math"
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	"sdmm/internal/aphelion/editing"
+	// APHELION EDIT ADDITION END
 
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/overlay"
 	"sdmm/internal/dmapi/dmmap/dmmdata"
@@ -43,6 +46,11 @@ type ToolGrab struct {
 	dragging bool
 
 	mode tSelectMode
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	move             *editing.Move
+	selectionHistory *editing.SelectionHistory
+	placement        *grabPlacement
+	// APHELION EDIT ADDITION END
 }
 
 func (ToolGrab) Name() string {
@@ -58,6 +66,21 @@ func (t *ToolGrab) HasSelectedArea() bool {
 }
 
 func (t *ToolGrab) Reset() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if t.placement != nil {
+		t.placement.owner.FinishSelectionMove(t.placement.move, true)
+		t.placement = nil
+	}
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	t.selectionHistory = nil
+	if t.move != nil {
+		ed.FinishSelectionMove(t.move, true)
+		t.move = nil
+	}
+	t.dragging = false
+	t.mode = tSelectModeSelectArea
+	// APHELION EDIT ADDITION END
 	t.fillStart = util.Point{}
 	t.fillAreaInit = util.Bounds{}
 	t.fillArea = util.Bounds{X1: math.MaxFloat32, Y1: math.MaxFloat32}
@@ -75,7 +98,8 @@ func newGrab() *ToolGrab {
 }
 
 func (t *ToolGrab) Stale() bool {
-	return !t.dragging
+	// APHELION EDIT CHANGE - PASTE PLACEMENT - ORIGINAL: return !t.dragging
+	return !t.dragging && !t.Placing()
 }
 
 func (ToolGrab) AltBehaviour() bool {
@@ -86,12 +110,18 @@ func (t *ToolGrab) SelectArea(tiles []util.Point) {
 	if len(tiles) == 0 {
 		return
 	}
+	// APHELION EDIT ADDITION START - SELECTION HISTORY
+	t.selectionHistory = nil
+	// APHELION EDIT ADDITION END
 
 	t.fillStart = tiles[0]
 	for _, tile := range tiles {
 		t.selectArea(float64(t.fillArea.X1), float64(t.fillArea.Y1), float64(t.fillArea.X2), float64(t.fillArea.Y2), tile)
 	}
 	t.stopMoveArea()
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	t.mode = tSelectModeMoveArea
+	// APHELION EDIT ADDITION END
 }
 
 func (t *ToolGrab) PreSelectArea(tiles []util.Point) {
@@ -104,12 +134,21 @@ func (t *ToolGrab) PreSelectArea(tiles []util.Point) {
 }
 
 func (t *ToolGrab) process() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	t.processPlacement()
+	// APHELION EDIT ADDITION END
 	if t.active() {
 		ed.OverlayPushArea(t.fillArea, overlay.ColorToolSelectTileFill, overlay.ColorToolSelectTileBorder)
 	}
 }
 
 func (t *ToolGrab) onStart(coord util.Point) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if t.Placing() {
+		t.clickPlacement(coord)
+		return
+	}
+	// APHELION EDIT ADDITION END
 	t.dragging = true
 
 	switch t.mode {
@@ -122,13 +161,29 @@ func (t *ToolGrab) onStart(coord util.Point) {
 
 func (t *ToolGrab) startSelectArea(coord util.Point) {
 	t.Reset()
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	t.dragging = true
+	// APHELION EDIT ADDITION END
 	t.fillStart = coord
 	t.onMove(coord)
 }
 
 func (t *ToolGrab) startMoveArea(coord util.Point) {
-	if t.fillArea.Contains(float32(coord.X), float32(coord.Y)) {
+	// APHELION EDIT CHANGE - SELECTION LIFECYCLE - ORIGINAL: if t.fillArea.Contains(float32(coord.X), float32(coord.Y)) {
+	if coord.Z == t.fillStart.Z && t.fillArea.Contains(float32(coord.X), float32(coord.Y)) {
+		// APHELION EDIT ADDITION START - SELECTION ROTATION
+		// Undo and remote acknowledgements can replace contents between gestures.
+		t.initTiles = collectTiles(ed.Dmm(), t.fillArea, t.fillStart.Z)
+		// APHELION EDIT ADDITION END
 		t.startMovePoint = coord
+		// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+		var err error
+		t.move, err = ed.BeginSelectionMove(t.fillArea, t.fillStart.Z)
+		if err != nil {
+			t.dragging = false
+			util.ShowErrorDialog("Unable to move selection: " + err.Error())
+		}
+		// APHELION EDIT ADDITION END
 	} else {
 		t.mode = tSelectModeSelectArea
 		t.onStart(coord)
@@ -136,6 +191,12 @@ func (t *ToolGrab) startMoveArea(coord util.Point) {
 }
 
 func (t *ToolGrab) onMove(coord util.Point) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if t.Placing() {
+		t.UpdatePlacement(coord)
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if !t.active() {
 		return
 	}
@@ -158,6 +219,14 @@ func (t *ToolGrab) selectArea(minX, minY, maxX, maxY float64, coord util.Point) 
 }
 
 func (t *ToolGrab) moveArea(coord util.Point) {
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	if t.move == nil {
+		return
+	}
+	if area, err := ed.PreviewSelectionMove(t.move, coord.Minus(t.startMovePoint)); err == nil {
+		t.fillArea = area
+	}
+	/* APHELION EDIT REMOVAL START - SELECTION LIFECYCLE
 	dmm := ed.Dmm()
 
 	shift := coord.Minus(t.startMovePoint)
@@ -201,6 +270,8 @@ func (t *ToolGrab) moveArea(coord util.Point) {
 	}
 
 	ed.UpdateCanvasByCoords(updateCoords)
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION END
 }
 
 func (t *ToolGrab) onStop(util.Point) {
@@ -212,9 +283,22 @@ func (t *ToolGrab) onStop(util.Point) {
 	case tSelectModeSelectArea:
 		t.stopSelectArea()
 	case tSelectModeMoveArea:
-		t.stopMoveArea()
+		// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+		if t.move != nil {
+			move := t.move
+			_ = t.trackSelectionTransform(t.fillAreaInit, true, func() (util.Bounds, error) {
+				ed.FinishSelectionMove(move, false)
+				return move.Bounds(), nil
+			})
+			t.move = nil
+		} else {
+			t.stopMoveArea()
+		}
+		/* APHELION EDIT REMOVAL START - SELECTION LIFECYCLE
 		// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: go ed.CommitChanges("Move Grabbed Area")
 		ed.CommitOperation("Move Grabbed Area")
+		APHELION EDIT REMOVAL END */
+		// APHELION EDIT ADDITION END
 	}
 
 	t.dragging = false
@@ -227,6 +311,12 @@ func (t *ToolGrab) stopSelectArea() {
 }
 
 func (t *ToolGrab) stopMoveArea() {
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	if !ed.Dmm().HasTile(util.Point{X: int(t.fillArea.X1), Y: int(t.fillArea.Y1), Z: t.fillStart.Z}) || !ed.Dmm().HasTile(util.Point{X: int(t.fillArea.X2), Y: int(t.fillArea.Y2), Z: t.fillStart.Z}) {
+		t.Reset()
+		return
+	}
+	// APHELION EDIT ADDITION END
 	t.initTiles = collectTiles(ed.Dmm(), t.fillArea, t.fillStart.Z)
 	t.fillAreaInit = t.fillArea
 }

@@ -1,11 +1,11 @@
 package model
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"sort"
 )
 
@@ -27,7 +27,7 @@ func (snapshot Snapshot) Hash() (string, error) {
 		return tiles[left].Coord.X < tiles[right].Coord.X
 	})
 
-	var canonical bytes.Buffer
+	canonical := canonicalEncoder{digest: sha256.New()}
 	writeString(&canonical, canonicalMapDomain)
 	writeUint64(&canonical, uint64(snapshot.MaxX))
 	writeUint64(&canonical, uint64(snapshot.MaxY))
@@ -55,8 +55,9 @@ func (snapshot Snapshot) Hash() (string, error) {
 		}
 	}
 
-	digest := sha256.Sum256(canonical.Bytes())
-	return hex.EncodeToString(digest[:]), nil
+	canonical.flush()
+	var digest [sha256.Size]byte
+	return hex.EncodeToString(canonical.digest.Sum(digest[:0])), nil
 }
 
 func ValidateSHA256(name string, value string) error {
@@ -118,13 +119,38 @@ func (snapshot Snapshot) Contains(coord Coord) bool {
 		coord.Z >= 1 && coord.Z <= snapshot.MaxZ
 }
 
-func writeString(buffer *bytes.Buffer, value string) {
-	writeUint64(buffer, uint64(len(value)))
-	_, _ = buffer.WriteString(value)
+// canonicalEncoder streams exactly the v1 canonical bytes with bounded scratch
+// space. Batching small fields avoids an allocation/interface call per integer.
+// Each invocation owns its buffer and digest; there is no shared mutable cache.
+type canonicalEncoder struct {
+	digest hash.Hash
+	data   [4096]byte
+	used   int
 }
 
-func writeUint64(buffer *bytes.Buffer, value uint64) {
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], value)
-	_, _ = buffer.Write(encoded[:])
+func (buffer *canonicalEncoder) flush() {
+	if buffer.used != 0 {
+		_, _ = buffer.digest.Write(buffer.data[:buffer.used])
+		buffer.used = 0
+	}
+}
+
+func writeString(buffer *canonicalEncoder, value string) {
+	writeUint64(buffer, uint64(len(value)))
+	for len(value) != 0 {
+		copied := copy(buffer.data[buffer.used:], value)
+		buffer.used += copied
+		value = value[copied:]
+		if buffer.used == len(buffer.data) {
+			buffer.flush()
+		}
+	}
+}
+
+func writeUint64(buffer *canonicalEncoder, value uint64) {
+	if len(buffer.data)-buffer.used < 8 {
+		buffer.flush()
+	}
+	binary.BigEndian.PutUint64(buffer.data[buffer.used:buffer.used+8], value)
+	buffer.used += 8
 }

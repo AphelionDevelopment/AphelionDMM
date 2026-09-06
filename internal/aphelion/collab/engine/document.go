@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 const MaxTileChanges = 4096
 
 type Document struct {
+	// Snapshot payloads and accepted records are immutable after validation.
+	// Public inputs/results are deep copies; branches own their metadata maps
+	// and validation copies the tile table before replacing or appending states.
 	snapshot model.Snapshot
 	mapHash  string
 	hashes   map[model.Revision]string
@@ -69,7 +73,7 @@ func (document *Document) Snapshot() model.Snapshot {
 
 func (document *Document) Clone() *Document {
 	clone := &Document{
-		snapshot: model.CloneSnapshot(document.snapshot),
+		snapshot: document.snapshot,
 		mapHash:  document.mapHash,
 		hashes:   make(map[model.Revision]string, len(document.hashes)),
 		accepted: make(map[model.OperationID]model.AcceptedOperation, len(document.accepted)),
@@ -79,7 +83,7 @@ func (document *Document) Clone() *Document {
 		clone.hashes[revision] = hash
 	}
 	for operationID, accepted := range document.accepted {
-		clone.accepted[operationID] = model.CloneAcceptedOperation(accepted)
+		clone.accepted[operationID] = accepted
 	}
 	for targetID, inverseID := range document.inverted {
 		clone.inverted[targetID] = inverseID
@@ -142,7 +146,8 @@ func (document *Document) validate(operation model.Operation) (model.Operation, 
 		return model.Operation{}, model.Snapshot{}, "", err
 	}
 
-	candidate := model.CloneSnapshot(document.snapshot)
+	candidate := document.snapshot
+	candidate.Tiles = slices.Clone(document.snapshot.Tiles)
 	tileIndexes := make(map[model.Coord]int, len(candidate.Tiles))
 	for index, tile := range candidate.Tiles {
 		tileIndexes[tile.Coord] = index

@@ -51,6 +51,11 @@ func New(app App, editor editor) *Panel {
 }
 
 func (p *Panel) Process() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e, ok := p.editor.(interface{ HasPastePlacement() bool }); ok && e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if selectedInstance, ok := p.app.SelectedInstance(); ok {
 		p.ProcessV(selectedInstance)
 	}

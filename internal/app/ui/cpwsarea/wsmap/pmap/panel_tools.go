@@ -63,6 +63,9 @@ var (
 				w.TextFrame("3"),
 				w.Separator(),
 				w.Text("Select the area / Move the selection with visible objects inside"),
+				// APHELION EDIT ADDITION START - SELECTION ROTATION
+				w.Text("[ / ]: rotate. H / V: mirror. Alt+Arrow: move one tile. Esc: deselect. F1: all shortcuts."),
+				// APHELION EDIT ADDITION END
 			},
 		},
 		tools.TNMove: {
@@ -83,7 +86,8 @@ var (
 				w.AlignTextToFramePadding(),
 				w.Text(tools.TNPick),
 				w.SameLine(),
-				w.TextFrame("Hold S"),
+				// APHELION EDIT CHANGE - EDITOR SHORTCUTS - ORIGINAL: w.TextFrame("Hold S"),
+				w.TextFrame("5 / Hold S"),
 				w.Separator(),
 				w.Text("Pick the hovered instance"),
 			},
@@ -94,7 +98,8 @@ var (
 				w.AlignTextToFramePadding(),
 				w.Text(tools.TNDelete),
 				w.SameLine(),
-				w.TextFrame("Hold D"),
+				// APHELION EDIT CHANGE - EDITOR SHORTCUTS - ORIGINAL: w.TextFrame("Hold D"),
+				w.TextFrame("6 / Hold D"),
 				w.Separator(),
 				w.Text("Delete the hovered instance"),
 				w.Line(w.TextFrame("+Alt"), w.Text("Delete the whole tile")),
@@ -106,7 +111,8 @@ var (
 				w.AlignTextToFramePadding(),
 				w.Text(tools.TNReplace),
 				w.SameLine(),
-				w.TextFrame("Hold R"),
+				// APHELION EDIT CHANGE - EDITOR SHORTCUTS - ORIGINAL: w.TextFrame("Hold R"),
+				w.TextFrame("7 / Hold R"),
 				w.Separator(),
 				w.Text("Replace the hovered instance with the selected object"),
 			},
@@ -115,6 +121,9 @@ var (
 )
 
 func (p *PaneMap) showToolsPanel() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	p.showPastePlacementControls()
+	// APHELION EDIT ADDITION END
 	w.Layout{
 		p.panelToolsLayoutTools(),
 		w.SameLine(),
@@ -123,6 +132,19 @@ func (p *PaneMap) showToolsPanel() {
 			p.panelToolsLayoutSettings(),
 		},
 	}.Build()
+	// APHELION EDIT ADDITION START - SELECTION ROTATION
+	if tools.IsSelected(tools.TNGrab) && p.canTransformSelection() {
+		w.Layout{
+			w.Button("Rotate Left [", func() { p.rotateSelection(false) }).Tooltip("Rotate visible contents 90 degrees left around the bottom-left corner"),
+			w.SameLine(),
+			w.Button("Rotate Right ]", func() { p.rotateSelection(true) }).Tooltip("Rotate visible contents 90 degrees right around the bottom-left corner"),
+		}.Build()
+		p.showSelectionMirrorButtons()
+		if !tools.Selected().(*tools.ToolGrab).Placing() {
+			p.showSelectionNudgeButtons()
+		}
+	}
+	// APHELION EDIT ADDITION END
 }
 
 func (p *PaneMap) panelToolsLayoutTools() (layout w.Layout) {

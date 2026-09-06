@@ -1,11 +1,13 @@
 package editor
 
 import (
-	"sdmm/internal/app/command"
+	// APHELION EDIT REMOVAL - LOCAL RESIZE - ORIGINAL: "sdmm/internal/app/command"
 	"sdmm/internal/app/window"
 	"sdmm/internal/util"
 )
 
+/* APHELION EDIT REMOVAL START - LOCAL RESIZE
+The settings panel now calls ResizeMap before changing the display map.
 func (e *Editor) CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ int) {
 	initialMapTiles := e.pMap.Snapshot().Initial().Copy().Tiles // Remember initial tiles to restore them on undo.
 	newMaxX, newMaxY, newMaxZ := e.dmm.MaxX, e.dmm.MaxY, e.dmm.MaxZ
@@ -34,18 +36,18 @@ func (e *Editor) onMapSizeChange(maxZ int) {
 	e.initializeCollaboration()
 	// APHELION EDIT ADDITION END
 }
+APHELION EDIT REMOVAL END */
 
 // APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: CommitChanges used asynchronous snapshot comparison.
 func (e *Editor) CommitOperation(commitMsg string) {
 	// APHELION EDIT ADDITION START - COLLABORATION
-	if e.collaborationErr == nil && e.executor != nil {
-		e.commitOperation(commitMsg)
-		return
-	}
-	e.commitChangesLegacy(commitMsg)
+	e.commitWithAuthority(commitMsg)
 	// APHELION EDIT ADDITION END
 }
 
+/* APHELION EDIT REMOVAL START - OPERATION AUTHORITY
+Retain the inherited snapshot-history implementation as provenance. Failed
+authority must not select another commit engine.
 // APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: func (e *Editor) commitChanges(commitMsg string)
 func (e *Editor) commitChangesLegacy(commitMsg string) {
 	stateId, tilesToUpdate := e.pMap.Snapshot().Commit()
@@ -78,6 +80,7 @@ func (e *Editor) commitChangesLegacy(commitMsg string) {
 		e.app.SyncVarEditor()
 	}))
 }
+APHELION EDIT REMOVAL END */
 
 // We need to update bucket in the main thread, since it can have OpenGL operations.
 // RunLater do that by running the job in th end of the frame.

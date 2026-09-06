@@ -17,12 +17,15 @@ import (
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/config"
 	"sdmm/internal/app/prefs"
+	"sdmm/internal/app/ui/cpwsarea/wsmap/tools"
+	"sdmm/internal/app/ui/shortcut"
 	"sdmm/internal/dmapi/dm"
 	"sdmm/internal/dmapi/dmenv"
 	"sdmm/internal/dmapi/dmmap"
 	"sdmm/internal/dmapi/dmmap/dmmdata"
 	"sdmm/internal/dmapi/dmmap/dmmdata/dmmprefab"
 	"sdmm/internal/dmapi/dmvars"
+	"sdmm/internal/util"
 )
 
 // This gate exercises the real PaneMap constructor and WsMap.Save with a
@@ -86,6 +89,49 @@ func TestSaveAcknowledgementBoundaries(t *testing.T) {
 	app := &saveTestApp{environment: environment, commands: command.NewStorage(), jobs: make(chan func(), 16)}
 	app.commands.SetStack(path)
 	ws := New(app, mapState)
+	// Exercise the shipped shortcut registry -> Grab -> Editor path with this real
+	// hidden-context workspace before testing network save acknowledgement.
+	ws.Map().OnActivate()
+	ws.Map().SetShortcutsVisible(true)
+	grab := tools.SetSelected(tools.TNGrab).(*tools.ToolGrab)
+	grab.SelectArea([]util.Point{{X: 1, Y: 1, Z: 1}})
+	io := imgui.CurrentIO()
+	io.SetIniFilename("")
+	io.SetDisplaySize(imgui.Vec2{X: 640, Y: 480})
+	io.Fonts().TextureDataRGBA32()
+	for _, key := range []glfw.Key{glfw.KeyRightBracket, glfw.KeyLeftBracket} {
+		io.KeyPress(int(key))
+		imgui.NewFrame()
+		shortcut.Process()
+		imgui.EndFrame()
+		io.KeyRelease(int(key))
+		got := mapState.Tiles[0].Instances()[2].Prefab().Vars().ValueV("dir", "")
+		want := "8"
+		if key == glfw.KeyLeftBracket {
+			want = "2"
+		}
+		if got != want {
+			t.Fatalf("rotation shortcut %v: dir=%s want=%s", key, got, want)
+		}
+	}
+	if !grab.HasSelectedArea() {
+		t.Fatal("rotation lost the grabbed selection")
+	}
+	for _, binding := range []struct {
+		key  glfw.Key
+		tool string
+	}{{glfw.Key5, tools.TNPick}, {glfw.Key6, tools.TNDelete}, {glfw.Key7, tools.TNReplace}} {
+		io.KeyPress(int(binding.key))
+		imgui.NewFrame()
+		shortcut.Process()
+		imgui.EndFrame()
+		io.KeyRelease(int(binding.key))
+		if !tools.IsSelected(binding.tool) {
+			t.Fatalf("shortcut %v did not select %s", binding.key, binding.tool)
+		}
+	}
+	ws.Map().SetShortcutsVisible(false)
+	ws.Map().OnDeactivate()
 	initial, err := ws.Map().Editor().CollaborationSnapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)

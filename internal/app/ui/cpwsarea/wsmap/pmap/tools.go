@@ -22,6 +22,14 @@ var (
 )
 
 func processTempToolsMode() {
+	// APHELION EDIT ADDITION START - SHORTCUT MATCHING
+	// Holding a letter while typing or using a command must not deselect Grab.
+	if imgui.IsAnyItemActive() || imgui.CurrentIO().WantTextInput() ||
+		imgui.IsKeyDown(int(glfw.KeyLeftControl)) || imgui.IsKeyDown(int(glfw.KeyRightControl)) ||
+		imgui.IsKeyDown(int(glfw.KeyLeftSuper)) || imgui.IsKeyDown(int(glfw.KeyRightSuper)) {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if !tmpToolIsInTemporalMode {
 		tmpToolLastSelectedName = tools.Selected().Name()
 	}

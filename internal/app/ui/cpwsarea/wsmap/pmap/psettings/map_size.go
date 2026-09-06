@@ -2,7 +2,8 @@ package psettings
 
 import (
 	"fmt"
-	"math"
+	// APHELION EDIT CHANGE - LOCAL RESIZE - ORIGINAL: "math"
+	"sdmm/internal/aphelion/collab/model"
 
 	"sdmm/internal/imguiext"
 	"sdmm/internal/imguiext/style"
@@ -13,9 +14,12 @@ import (
 )
 
 const (
-	possibleMaxX = math.MaxInt
-	possibleMaxY = math.MaxInt
-	possibleMaxZ = math.MaxInt
+	// APHELION EDIT CHANGE - LOCAL RESIZE - ORIGINAL: possibleMaxX = math.MaxInt
+	possibleMaxX = model.MaxMapDimension
+	// APHELION EDIT CHANGE - LOCAL RESIZE - ORIGINAL: possibleMaxY = math.MaxInt
+	possibleMaxY = model.MaxMapDimension
+	// APHELION EDIT CHANGE - LOCAL RESIZE - ORIGINAL: possibleMaxZ = math.MaxInt
+	possibleMaxZ = model.MaxMapDimension
 )
 
 type sessionMapSize struct {
@@ -28,6 +32,9 @@ func (s sessionMapSize) String() string {
 
 func (p *Panel) DropSessionMapSize() {
 	p.sessionMapSize = nil
+	// APHELION EDIT ADDITION START - LOCAL RESIZE
+	p.mapSizeError = ""
+	// APHELION EDIT ADDITION END
 }
 
 func (p *Panel) showMapSize() {
@@ -71,7 +78,10 @@ func (p *Panel) showMapSize() {
 		// APHELION EDIT ADDITION START - COLLABORATION
 		imgui.EndDisabled()
 		if !canChangeMapSize {
-			imgui.TextDisabled("Map resize is unavailable during collaboration")
+			imgui.TextDisabled("Resize requires an idle local map")
+		}
+		if p.mapSizeError != "" {
+			imgui.TextWrapped(p.mapSizeError)
 		}
 		// APHELION EDIT ADDITION END
 	} else {
@@ -81,13 +91,22 @@ func (p *Panel) showMapSize() {
 
 func (p *Panel) doSetMapSize() {
 	// APHELION EDIT ADDITION START - COLLABORATION
-	if !p.editor.CanChangeMapSize() {
+	if p.sessionMapSize == nil || !p.editor.CanChangeMapSize() {
 		return
 	}
 	// APHELION EDIT ADDITION END
 	log.Printf("do set map size [%s]: %v", p.editor.Dmm().Name, p.sessionMapSize)
+	/* APHELION EDIT REMOVAL START - LOCAL RESIZE
 	oldMaxX, oldMaxY, oldMaxZ := p.editor.Dmm().MaxX, p.editor.Dmm().MaxY, p.editor.Dmm().MaxZ
 	p.editor.Dmm().SetMapSize(int(p.sessionMapSize.maxX), int(p.sessionMapSize.maxY), int(p.sessionMapSize.maxZ))
 	p.editor.CommitMapSizeChange(oldMaxX, oldMaxY, oldMaxZ)
+	APHELION EDIT REMOVAL END */
+	// APHELION EDIT ADDITION START - LOCAL RESIZE
+	if err := p.editor.ResizeMap(int(p.sessionMapSize.maxX), int(p.sessionMapSize.maxY), int(p.sessionMapSize.maxZ)); err != nil {
+		p.mapSizeError = err.Error()
+		return
+	}
+	p.mapSizeError = ""
+	// APHELION EDIT ADDITION END
 	p.sessionMapSize = nil
 }

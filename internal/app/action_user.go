@@ -713,7 +713,9 @@ func (a *app) DoPaste() {
 	log.Print("do paste")
 	if ws, ok := a.activeWsMap(); ok {
 		ws.Map().Editor().TilePasteSelected()
+		/* APHELION EDIT REMOVAL START - PASTE PLACEMENT
 		ws.Map().Editor().CommitOperation("Paste Tile")
+		APHELION EDIT REMOVAL END */
 	}
 }
 

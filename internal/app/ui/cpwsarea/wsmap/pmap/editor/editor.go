@@ -3,6 +3,9 @@ package editor
 import (
 	"sdmm/internal/aphelion/collab/executor"
 	"sdmm/internal/aphelion/collab/model"
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	"sdmm/internal/aphelion/editing"
+	// APHELION EDIT ADDITION END
 	"sdmm/internal/app/command"
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/ui/cpwsarea/wsmap/pmap/canvas"
@@ -24,11 +27,20 @@ type Editor struct {
 	pMap attachedMap
 
 	dmm *dmmap.Dmm
+	// APHELION EDIT ADDITION START - SEARCH VIEW OWNERSHIP
+	mapViewGeneration uint64
+	mapViewClosed     bool
+	// APHELION EDIT ADDITION END
 
 	flickAreas    []overlay.FlickArea
 	flickInstance []overlay.FlickInstance
 
 	areasZones []AreaZone
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	selectionMove           *editing.Move
+	selectionMoveGeneration uint64
+	selectionOutcome        func(bool)
+	// APHELION EDIT ADDITION END
 
 	// APHELION EDIT ADDITION START - COLLABORATION
 	executor              executor.Executor
@@ -39,6 +51,8 @@ type Editor struct {
 	pendingChanges        map[model.Coord]model.TileState
 	collaborationErr      error
 	attachmentGeneration  uint64
+	historyGeneration     uint64 // Resumable local history; callback generation never rewinds.
+	history               command.Target
 	unresolvedSubmissions map[model.OperationID]struct{}
 	// APHELION EDIT ADDITION END
 }
@@ -114,6 +128,7 @@ func New(app app, attachedMap attachedMap, dmm *dmmap.Dmm) *Editor {
 		dmm:  dmm,
 	}
 	// APHELION EDIT ADDITION START - COLLABORATION
+	e.history = app.CommandStorage().Bind(dmm.Path.Absolute)
 	e.initializeCollaboration()
 	// APHELION EDIT ADDITION END
 	e.updateAreasZones()
@@ -151,6 +166,11 @@ func (e *Editor) SelectedPrefab() (*dmmprefab.Prefab, bool) {
 
 // ReplacePrefab replaces all old prefabs on the map with the new one. Commits map changes.
 func (e *Editor) ReplacePrefab(oldPrefab, newPrefab *dmmprefab.Prefab) {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	if e.HasPastePlacement() {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	for _, tile := range e.dmm.Tiles {
 		for _, instance := range tile.Instances() {
 			if instance.Prefab().Id() == oldPrefab.Id() {

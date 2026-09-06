@@ -1,6 +1,9 @@
 package tools
 
 import (
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	"sdmm/internal/aphelion/editing"
+	// APHELION EDIT ADDITION END
 	"sdmm/internal/app/prefs"
 	"sdmm/internal/app/window"
 	"sdmm/internal/imguiext"
@@ -42,6 +45,11 @@ type canvasState interface {
 
 type editor interface {
 	Dmm() *dmmap.Dmm
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	BeginSelectionMove(util.Bounds, int) (*editing.Move, error)
+	PreviewSelectionMove(*editing.Move, util.Point) (util.Bounds, error)
+	FinishSelectionMove(*editing.Move, bool)
+	// APHELION EDIT ADDITION END
 
 	CommitOperation(commitMsg string)
 	// APHELION EDIT ADDITION START - COLLABORATION
@@ -128,6 +136,10 @@ func Tools() map[string]Tool {
 }
 
 func process(altBehaviour bool) {
+	// APHELION EDIT ADDITION START - SELECTION LIFECYCLE
+	// Escape must remain available while the canvas owns an active mouse item.
+	cancelGrabOnEscape()
+	// APHELION EDIT ADDITION END
 	if active && startedTool != Selected() {
 		startedTool.onStop(oldCoord)
 	}

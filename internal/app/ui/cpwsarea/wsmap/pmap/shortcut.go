@@ -10,6 +10,28 @@ import (
 )
 
 func (p *PaneMap) addShortcuts() {
+	// APHELION EDIT ADDITION START - PASTE PLACEMENT
+	p.addPasteShortcuts()
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT ADDITION START - EDITOR SHORTCUTS
+	p.addSelectionNudgeShortcuts()
+	p.addSelectionMirrorShortcuts()
+	for _, binding := range []struct {
+		name, tool     string
+		key, alternate glfw.Key
+	}{
+		{"selectPickTool", tools.TNPick, glfw.Key5, glfw.KeyKP5},
+		{"selectDeleteTool", tools.TNDelete, glfw.Key6, glfw.KeyKP6},
+		{"selectReplaceTool", tools.TNReplace, glfw.Key7, glfw.KeyKP7},
+	} {
+		p.shortcuts.Add(shortcut.Shortcut{Name: "pmap#" + binding.name, FirstKey: binding.key, FirstKeyAlt: binding.alternate, Action: func() { tools.SetSelected(binding.tool) }})
+	}
+	p.shortcuts.Add(shortcut.Shortcut{Name: "pmap#rotateLeft", FirstKey: glfw.KeyLeftBracket, Action: func() { p.rotateSelection(false) }, IsEnabled: p.canTransformSelection})
+	p.shortcuts.Add(shortcut.Shortcut{Name: "pmap#rotateRight", FirstKey: glfw.KeyRightBracket, Action: func() { p.rotateSelection(true) }, IsEnabled: p.canTransformSelection})
+	p.shortcuts.Add(shortcut.Shortcut{Name: "pmap#doDeselectAll", FirstKey: glfw.KeyEscape, Action: p.DoDeselect})
+	// Shift+= produces + on keyboards where the existing = binding needs Shift.
+	p.shortcuts.Add(shortcut.Shortcut{Name: "pmap#doZoomIn", FirstKey: glfw.KeyLeftShift, FirstKeyAlt: glfw.KeyRightShift, SecondKey: glfw.KeyEqual, Action: p.doZoomIn})
+	// APHELION EDIT ADDITION END
 	p.shortcuts.Add(shortcut.Shortcut{
 		Name:        "pmap#selectAddTool",
 		FirstKey:    glfw.Key1,

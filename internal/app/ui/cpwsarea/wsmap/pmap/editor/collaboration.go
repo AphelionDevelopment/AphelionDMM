@@ -77,7 +77,7 @@ func (e *Editor) CollaborationSnapshot(ctx context.Context) (model.Snapshot, err
 	if e.executor == nil {
 		return model.Snapshot{}, fmt.Errorf("read collaboration snapshot: executor is unavailable")
 	}
-	if len(e.pendingChanges) != 0 {
+	if e.selectionMove != nil || len(e.pendingChanges) != 0 {
 		return model.Snapshot{}, fmt.Errorf("read collaboration snapshot: map has an uncommitted edit")
 	}
 	snapshot, err := e.executor.Snapshot(ctx)
@@ -92,7 +92,7 @@ func (e *Editor) AttachCollaborationExecutor(execution executor.Executor) error 
 	if execution == nil {
 		return fmt.Errorf("attach collaboration executor: executor is nil")
 	}
-	if len(e.pendingChanges) != 0 {
+	if e.selectionMove != nil || len(e.pendingChanges) != 0 {
 		return fmt.Errorf("attach collaboration executor: map has an uncommitted edit")
 	}
 	snapshot, err := execution.Snapshot(context.Background())
@@ -111,6 +111,7 @@ func (e *Editor) AttachCollaborationExecutor(execution executor.Executor) error 
 	}
 	e.resetAttachment()
 	e.executor = execution
+	e.collaborationErr = nil
 	e.documentID = snapshot.DocumentID
 	e.setAuthoritative(snapshot)
 	e.refreshCollaborationView(e.pMap.ActiveLevel(), nil, snapshot)
@@ -119,7 +120,7 @@ func (e *Editor) AttachCollaborationExecutor(execution executor.Executor) error 
 
 // DetachCollaborationExecutor restores local compatibility mode from the synchronized snapshot.
 func (e *Editor) DetachCollaborationExecutor(ctx context.Context) error {
-	if len(e.pendingChanges) != 0 {
+	if e.selectionMove != nil || len(e.pendingChanges) != 0 {
 		return fmt.Errorf("detach collaboration executor: map has an uncommitted edit")
 	}
 	if pending, ok := e.executor.(pendingExecutor); ok && pending.HasUnacknowledgedOperations() {
@@ -149,7 +150,10 @@ func (e *Editor) DetachCollaborationExecutor(ctx context.Context) error {
 
 // ProcessCollaborationUpdates applies the latest network projection on the UI thread.
 func (e *Editor) ProcessCollaborationUpdates() {
-	if len(e.pendingChanges) != 0 {
+	if e.selectionMove != nil && e.selectionMove.Level() != e.pMap.ActiveLevel() {
+		e.FinishSelectionMove(e.selectionMove, true)
+	}
+	if e.selectionMove != nil || len(e.pendingChanges) != 0 {
 		return
 	}
 	execution, ok := e.executor.(projectionExecutor)
@@ -184,7 +188,7 @@ func (e *Editor) ProcessCollaborationUpdates() {
 
 // RefreshCollaborationSnapshot applies the executor's authoritative snapshot on the UI thread.
 func (e *Editor) RefreshCollaborationSnapshot(ctx context.Context) error {
-	if len(e.pendingChanges) != 0 {
+	if e.selectionMove != nil || len(e.pendingChanges) != 0 {
 		return fmt.Errorf("refresh collaboration snapshot: map has an uncommitted edit")
 	}
 	if e.executor == nil {
@@ -203,11 +207,14 @@ func (e *Editor) RefreshCollaborationSnapshot(ctx context.Context) error {
 }
 
 func (e *Editor) CanChangeMapSize() bool {
-	_, asynchronous := e.executor.(executor.AsyncExecutor)
-	return !asynchronous
+	_, local := e.executor.(*executor.Local)
+	return local && e.history.Valid() && e.collaborationErr == nil && e.selectionMove == nil && len(e.pendingChanges) == 0 && len(e.unresolvedSubmissions) == 0
 }
 
 func (e *Editor) BeginTileChange(point util.Point) {
+	// Invalidate derived queries even when capture fails: inherited callers may
+	// already be preparing a display edit. Queries defer while captures are open.
+	e.mapViewGeneration++
 	if e.collaborationErr != nil || e.executor == nil {
 		return
 	}
@@ -225,15 +232,12 @@ func (e *Editor) BeginTileChange(point util.Point) {
 }
 
 func (e *Editor) commitOperation(commitMessage string) {
+	selectionOutcome := e.selectionOutcome
 	if len(e.pendingChanges) == 0 {
+		selectionApplied(selectionOutcome, false)
 		return
 	}
 	execution := e.executor
-	base, err := execution.Snapshot(context.Background())
-	if err != nil {
-		e.rejectSpeculation(execution, fmt.Errorf("read authoritative snapshot: %w", err))
-		return
-	}
 	coords := make([]model.Coord, 0, len(e.pendingChanges))
 	for coord := range e.pendingChanges {
 		coords = append(coords, coord)
@@ -252,6 +256,7 @@ func (e *Editor) commitOperation(commitMessage string) {
 		point := util.Point{X: coord.X, Y: coord.Y, Z: coord.Z}
 		after, captureErr := mapadapter.CaptureTile(e.dmm.GetTile(point))
 		if captureErr != nil {
+			selectionApplied(selectionOutcome, false)
 			e.rejectSpeculation(execution, captureErr)
 			return
 		}
@@ -261,12 +266,23 @@ func (e *Editor) commitOperation(commitMessage string) {
 		}
 		changes = append(changes, model.TileChange{Coord: coord, Before: before, After: after})
 	}
-	e.pendingChanges = make(map[model.Coord]model.TileState)
 	if len(changes) == 0 {
+		e.pendingChanges = make(map[model.Coord]model.TileState)
+		selectionApplied(selectionOutcome, false)
 		return
 	}
+	// A restored/no-op gesture needs no full-map copy. Read authority only after
+	// the touched tiles prove there is an operation to submit.
+	base, err := execution.Snapshot(context.Background())
+	if err != nil {
+		selectionApplied(selectionOutcome, false)
+		e.rejectSpeculation(execution, fmt.Errorf("read authoritative snapshot: %w", err))
+		return
+	}
+	e.pendingChanges = make(map[model.Coord]model.TileState)
 	operation, err := e.forwardOperation(base, changes)
 	if err != nil {
+		selectionApplied(selectionOutcome, false)
 		e.rejectSpeculation(execution, err)
 		return
 	}
@@ -274,11 +290,12 @@ func (e *Editor) commitOperation(commitMessage string) {
 	activeLevel := e.pMap.ActiveLevel()
 	e.submitOperation(execution, operation, func(accepted model.AcceptedOperation) {
 		e.syncFromExecutor(execution, false, activeLevel, coords)
-		e.pushAcceptedCommand(execution, commitMessage, accepted, acceptedChanges, activeLevel, coords)
-	})
+		selectionApplied(selectionOutcome, true)
+		e.pushAcceptedCommand(execution, commitMessage, accepted, acceptedChanges, activeLevel, coords, selectionOutcome)
+	}, selectionOutcome)
 }
 
-func (e *Editor) submitOperation(execution executor.Executor, operation model.Operation, accepted func(model.AcceptedOperation)) {
+func (e *Editor) submitOperation(execution executor.Executor, operation model.Operation, accepted func(model.AcceptedOperation), selectionOutcome func(bool)) {
 	generation := e.attachmentGeneration
 	if asynchronous, ok := execution.(executor.AsyncExecutor); ok {
 		e.unresolvedSubmissions[operation.OperationID] = struct{}{}
@@ -293,6 +310,7 @@ func (e *Editor) submitOperation(execution executor.Executor, operation model.Op
 				delete(e.unresolvedSubmissions, operation.OperationID)
 				if executeErr != nil {
 					e.rejectSpeculation(execution, executeErr)
+					selectionApplied(selectionOutcome, false)
 					return
 				}
 				accepted(result)
@@ -301,22 +319,24 @@ func (e *Editor) submitOperation(execution executor.Executor, operation model.Op
 		if err != nil {
 			delete(e.unresolvedSubmissions, operation.OperationID)
 			e.rejectSpeculation(execution, err)
+			selectionApplied(selectionOutcome, false)
 		}
 		return
 	}
 	result, err := execution.Execute(context.Background(), operation)
 	if err != nil {
 		e.rejectSpeculation(execution, err)
+		selectionApplied(selectionOutcome, false)
 		return
 	}
 	accepted(result)
 }
 
-func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage string, accepted model.AcceptedOperation, acceptedChanges []model.TileChange, activeLevel int, coords []model.Coord) {
+func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage string, accepted model.AcceptedOperation, acceptedChanges []model.TileChange, activeLevel int, coords []model.Coord, selectionOutcome func(bool)) {
 	forwardID := accepted.OperationID
-	generation := e.attachmentGeneration
-	e.app.CommandStorage().Push(command.MakeAsync(commitMessage, func(complete func(error)) {
-		if generation != e.attachmentGeneration {
+	generation := e.historyGeneration
+	if !e.history.Push(command.MakeAsync(commitMessage, func(complete func(error)) {
+		if generation != e.historyGeneration {
 			complete(fmt.Errorf("editor attachment changed"))
 			return
 		}
@@ -333,10 +353,11 @@ func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage 
 				return
 			}
 			e.syncFromExecutor(execution, true, activeLevel, coords)
+			selectionApplied(selectionOutcome, false)
 			complete(nil)
 		})
 	}, func(complete func(error)) {
-		if generation != e.attachmentGeneration {
+		if generation != e.historyGeneration {
 			complete(fmt.Errorf("editor attachment changed"))
 			return
 		}
@@ -360,12 +381,20 @@ func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage 
 			}
 			forwardID = redone.OperationID
 			e.syncFromExecutor(execution, true, activeLevel, coords)
+			selectionApplied(selectionOutcome, true)
 			complete(nil)
 		})
-	}))
+	})) {
+		e.collaborationErr = fmt.Errorf("map command history was disposed")
+		e.reportCollaborationError("Unable to record map change", e.collaborationErr)
+	}
 }
 
 func (e *Editor) executeHistoryOperation(execution executor.Executor, operation model.Operation, complete func(model.AcceptedOperation, error)) {
+	if e.HasPastePlacement() {
+		complete(model.AcceptedOperation{}, fmt.Errorf("confirm or cancel paste before undo/redo"))
+		return
+	}
 	generation := e.attachmentGeneration
 	if asynchronous, ok := execution.(executor.AsyncExecutor); ok {
 		e.unresolvedSubmissions[operation.OperationID] = struct{}{}
@@ -422,7 +451,7 @@ func (e *Editor) syncFromExecutor(execution executor.Executor, apply bool, activ
 		e.reportCollaborationError("Unable to synchronize map", err)
 		return
 	}
-	if apply && len(e.pendingChanges) == 0 {
+	if apply && e.selectionMove == nil && len(e.pendingChanges) == 0 {
 		if err := mapadapter.ApplyWithEnvironment(e.dmm, snapshot, e.app.LoadedEnvironment()); err != nil {
 			e.reportCollaborationError("Unable to synchronize map", err)
 			return
@@ -451,6 +480,7 @@ func (e *Editor) refreshCollaborationView(activeLevel int, coords []model.Coord,
 }
 
 func (e *Editor) setAuthoritative(snapshot model.Snapshot) {
+	e.mapViewGeneration++
 	e.authoritative = model.CloneSnapshot(snapshot)
 	e.authoritativeTiles = make(map[model.Coord]model.TileState, len(snapshot.Tiles))
 	for _, tile := range snapshot.Tiles {
@@ -459,7 +489,15 @@ func (e *Editor) setAuthoritative(snapshot model.Snapshot) {
 }
 
 func (e *Editor) resetAttachment() {
+	e.mapViewGeneration++
+	// An attachment reset may follow installation of a replacement snapshot.
+	// Drop old preview ownership without restoring it over that new authority.
+	if e.selectionMove != nil {
+		e.selectionMove.Finish(false)
+		e.selectionMove = nil
+	}
 	e.attachmentGeneration++
+	e.historyGeneration = e.attachmentGeneration
 	e.pendingChanges = make(map[model.Coord]model.TileState)
 	e.unresolvedSubmissions = make(map[model.OperationID]struct{})
 }
@@ -467,6 +505,7 @@ func (e *Editor) resetAttachment() {
 // Close fences queued UI completions before the pane releases its resources.
 func (e *Editor) Close() {
 	e.resetAttachment()
+	e.mapViewClosed = true
 	e.executor = nil
 }
 
@@ -493,11 +532,17 @@ func (e *Editor) SaveVersion() (uint64, model.Revision) {
 
 func (e *Editor) ChangedSinceSave(generation uint64, revision model.Revision) bool {
 	return generation != e.attachmentGeneration || revision != e.authoritative.Revision ||
-		len(e.pendingChanges) != 0 || len(e.unresolvedSubmissions) != 0 || e.collaborationErr != nil
+		e.selectionMove != nil || len(e.pendingChanges) != 0 || len(e.unresolvedSubmissions) != 0 || e.collaborationErr != nil
 }
 
 func (e *Editor) reportCollaborationError(message string, err error) {
 	log.Error().Err(err).Msg(message)
+	// An embedding app may own error presentation. This also lets workspace
+	// verification exercise actual failure callbacks without native modal UI.
+	if reporter, ok := e.app.(interface{ ReportCollaborationError(string, error) }); ok {
+		reporter.ReportCollaborationError(message, err)
+		return
+	}
 	util.ShowErrorDialog(message + ": " + err.Error())
 }
 

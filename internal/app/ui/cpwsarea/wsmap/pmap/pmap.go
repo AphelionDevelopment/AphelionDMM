@@ -374,6 +374,11 @@ func (p *PaneMap) reloadCanvas() {
 }
 
 func (p *PaneMap) OnMapSizeChange() {
+	// APHELION EDIT ADDITION START - LOCAL RESIZE
+	if activePane == p || (activePane == nil && lastActivePane == p) {
+		tools.Selected().OnDeselect()
+	}
+	// APHELION EDIT ADDITION END
 	p.reloadCanvas()
 	p.pSettings.DropSessionMapSize()
 }

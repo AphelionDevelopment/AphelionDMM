@@ -78,7 +78,12 @@ func (c *Canvas) createCanvasTexture() {
 	gl.DeleteTextures(1, &c.texture)
 	gl.GenTextures(1, &c.texture)
 	gl.BindTexture(gl.TEXTURE_2D, c.texture)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, int32(c.width), int32(c.height), 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(make([]float32, int(c.width*c.height))))
+	// APHELION EDIT ADDITION START - CANVAS RESIZE ALLOCATION
+	// Process clears the full framebuffer before drawing or exposing its texture.
+	// No pixel unpack buffer is bound by the editor's rendering pipeline.
+	// APHELION EDIT ADDITION END
+	// APHELION EDIT CHANGE - CANVAS RESIZE ALLOCATION - ORIGINAL: gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, int32(c.width), int32(c.height), 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(make([]float32, int(c.width*c.height))))
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, int32(c.width), int32(c.height), 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 	gl.BindTexture(gl.TEXTURE_2D, 0)

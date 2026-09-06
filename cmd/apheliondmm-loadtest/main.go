@@ -25,7 +25,8 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 	endpoint := flags.String("endpoint", "", "collaboration service HTTPS endpoint")
 	origin := flags.String("origin", "", "configured WebSocket Origin")
 	sessionID := flags.String("session", "", "existing collaboration session ID")
-	scenarioPath := flags.String("scenario", "testdata/collaboration/load/pilot.json", "recorded load scenario JSON")
+	scenarioPath := flags.String("scenario", "", "recorded scenario JSON (defaults to pilot.json, or concurrent.json with -concurrent, under testdata/collaboration/load)")
+	concurrent := flags.Bool("concurrent", false, "offer independent intents and presence concurrently; verify every client's applied state")
 	timeout := flags.Duration("timeout", 10*time.Minute, "overall scenario timeout")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
@@ -40,16 +41,26 @@ func run(arguments []string, output, errorOutput io.Writer) int {
 		_, _ = fmt.Fprintf(errorOutput, "load hosted editor credentials: %v\n", err)
 		return 2
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	config := loadscenario.RunConfig{Endpoint: *endpoint, Origin: *origin, SessionID: *sessionID, OwnerToken: ownerToken, EditorTokens: editorTokens}
+	if *concurrent {
+		if *scenarioPath == "" {
+			*scenarioPath = "testdata/collaboration/load/concurrent.json"
+		}
+		return runConcurrentCommand(ctx, config, *scenarioPath, output, errorOutput)
+	}
+	if *scenarioPath == "" {
+		*scenarioPath = "testdata/collaboration/load/pilot.json"
+	}
 	scenario, err := loadScenario(*scenarioPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(errorOutput, "load scenario: %v\n", err)
 		return 1
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, *timeout)
-	defer cancel()
-	result, err := loadscenario.Run(ctx, loadscenario.RunConfig{Endpoint: *endpoint, Origin: *origin, SessionID: *sessionID, OwnerToken: ownerToken, EditorTokens: editorTokens}, scenario)
+	result, err := loadscenario.Run(ctx, config, scenario)
 	if err != nil {
 		_, _ = fmt.Fprintf(errorOutput, "run load scenario: %v\n", err)
 		return 1

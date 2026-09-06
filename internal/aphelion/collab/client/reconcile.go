@@ -126,15 +126,9 @@ func cloneTiles(tiles []model.Tile) []model.Tile {
 }
 
 func (projection Projection) Visible() (model.Snapshot, error) {
-	visible := model.CloneSnapshot(projection.Acknowledged)
-	for _, pending := range projection.Pending {
-		next, err := applyOperation(visible, pending)
-		if err == nil {
-			visible = next
-		}
-		// A competing authoritative edit can hide speculation without resolving
-		// its submitted intent. Retain the draft until its ordered response.
-	}
+	// A competing authoritative edit may hide speculation without resolving its
+	// submitted intent. Build visible state independently; retain pending drafts.
+	visible := visibleProjection(projection.Acknowledged, projection.Pending)
 	visible.Revision = projection.Acknowledged.Revision
 	return visible, nil
 }

@@ -132,6 +132,14 @@ func TestDocumentOwnerDoesNotAdvanceWhenAppendFails(t *testing.T) {
 	if current.Revision != snapshot.Revision {
 		t.Fatalf("revision after failed append = %d, want %d", current.Revision, snapshot.Revision)
 	}
+	beforeHash, err := snapshot.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterHash, err := current.Hash()
+	if err != nil || afterHash != beforeHash {
+		t.Fatal("failed durable append changed authoritative map contents")
+	}
 }
 
 func TestSubmitReconcilesCommittedAppendError(t *testing.T) {
