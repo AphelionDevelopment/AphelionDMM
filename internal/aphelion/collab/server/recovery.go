@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 
 	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
@@ -71,7 +70,7 @@ func loadStoredDocument(ctx context.Context, documentID model.DocumentID, store 
 	if observability != nil {
 		loadContext, finishLoad = observability.Store(ctx, collabtelemetry.StoreLoad)
 	}
-	snapshot, replay, err := store.Load(loadContext, documentID)
+	state, err := store.LoadRecovery(loadContext, documentID)
 	if err != nil {
 		finishLoad(err)
 		return nil, fmt.Errorf("load stored document: %w", err)
@@ -79,24 +78,12 @@ func loadStoredDocument(ctx context.Context, documentID model.DocumentID, store 
 	finishLoad(nil)
 	finishReplay := func(error) {}
 	if observability != nil {
-		_, finishReplay = observability.Replay(ctx, len(replay))
+		_, finishReplay = observability.Replay(ctx, len(state.Operations))
 	}
-	document, err := engine.NewDocument(snapshot)
+	document, err := state.Restore()
 	if err != nil {
 		finishReplay(err)
-		return nil, fmt.Errorf("open stored snapshot: %w", err)
-	}
-	for _, accepted := range replay {
-		verified, err := document.Apply(accepted.Operation, accepted.AcceptedAt)
-		if err != nil {
-			finishReplay(err)
-			return nil, fmt.Errorf("replay revision %d: %w", accepted.Revision, err)
-		}
-		if !reflect.DeepEqual(verified, accepted) {
-			err := fmt.Errorf("replay revision %d differs from stored operation", accepted.Revision)
-			finishReplay(err)
-			return nil, err
-		}
+		return nil, err
 	}
 	finishReplay(nil)
 	return document, nil

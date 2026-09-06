@@ -322,13 +322,10 @@ func TestClosedDurableQueueUsesStableSlowConsumerCode(t *testing.T) {
 	})
 	connection := connectTestClient(t, testServer.URL, created.SessionID, created.OwnerToken, 0)
 	defer func() { _ = connection.CloseNow() }()
-	service.hub.mutex.Lock()
-	session := service.hub.sessions[created.SessionID]
-	for id, subscriber := range session.durableSubscribers {
-		delete(session.durableSubscribers, id)
-		close(subscriber)
-	}
-	service.hub.mutex.Unlock()
+	service.hub.mutex.RLock()
+	owner := service.hub.sessions[created.SessionID].owner
+	service.hub.mutex.RUnlock()
+	owner.closeDurable()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, _, err := connection.Read(ctx)

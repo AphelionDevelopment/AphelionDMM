@@ -236,6 +236,44 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 		defer reauthorizationTicker.Stop()
 		reauthorization = reauthorizationTicker.C
 	}
+	sentRevision := snapshot.Revision
+	writeAccepted := func(accepted model.AcceptedOperation) error {
+		if accepted.Revision <= sentRevision {
+			return nil
+		}
+		if accepted.Revision != sentRevision+1 {
+			return fmt.Errorf("durable revision gap: got %d after %d", accepted.Revision, sentRevision)
+		}
+		acceptedHash, found, hashErr := service.store.RevisionHash(parent, accepted.DocumentID, accepted.Revision)
+		if hashErr != nil {
+			return fmt.Errorf("load durable hash: %w", hashErr)
+		}
+		if !found {
+			return fmt.Errorf("durable hash at revision %d is not retained", accepted.Revision)
+		}
+		if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "accepted-" + string(accepted.OperationID), SessionID: auth.sessionID, Type: protocol.ServerOperationAccepted}, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash}); err != nil {
+			return err
+		}
+		sentRevision = accepted.Revision
+		return nil
+	}
+	flushThrough := func(revision model.Revision) error {
+		for sentRevision < revision {
+			select {
+			case accepted, open := <-durable:
+				if !open {
+					_ = connection.Close(CloseSlowConsumer, "durable consumer fell behind")
+					return fmt.Errorf("durable subscriber fell behind")
+				}
+				if err := writeAccepted(accepted); err != nil {
+					return err
+				}
+			case <-parent.Done():
+				return parent.Err()
+			}
+		}
+		return nil
+	}
 	for {
 		select {
 		case <-parent.Done():
@@ -256,18 +294,8 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 				_ = connection.Close(CloseSlowConsumer, "durable consumer fell behind")
 				return fmt.Errorf("durable subscriber fell behind")
 			}
-			if accepted.Revision <= snapshot.Revision {
-				continue
-			}
-			acceptedHash, found, hashErr := service.store.RevisionHash(parent, accepted.DocumentID, accepted.Revision)
-			if hashErr != nil {
-				return fmt.Errorf("load durable hash at revision %d: %w", accepted.Revision, hashErr)
-			}
-			if !found {
-				return fmt.Errorf("durable hash at revision %d is not retained", accepted.Revision)
-			}
-			if err := writeServerEnvelope(parent, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "accepted-" + string(accepted.OperationID), SessionID: auth.sessionID, Type: protocol.ServerOperationAccepted}, protocol.OperationAcceptedPayload{Operation: accepted, MapHash: acceptedHash}); err != nil {
-				return fmt.Errorf("write accepted operation: %w", err)
+			if err := writeAccepted(accepted); err != nil {
+				return err
 			}
 		case presence, open := <-presenceUpdates:
 			if !open {
@@ -285,7 +313,7 @@ func (service *Service) serveWebSocket(parent context.Context, connection *webso
 					return fmt.Errorf("reauthorize hosted message: %w", err)
 				}
 			}
-			if err := service.handleClientMessage(parent, connection, session, auth, message); err != nil {
+			if err := service.handleClientMessage(parent, connection, session, auth, message, flushThrough); err != nil {
 				return err
 			}
 		}
@@ -323,7 +351,7 @@ func readClientMessages(ctx context.Context, connection *websocket.Conn, session
 	}
 }
 
-func (service *Service) handleClientMessage(ctx context.Context, connection *websocket.Conn, session sessionRecord, auth tokenRecord, message protocol.DecodedClient) error {
+func (service *Service) handleClientMessage(ctx context.Context, connection *websocket.Conn, session sessionRecord, auth tokenRecord, message protocol.DecodedClient, flushThrough func(model.Revision) error) error {
 	switch message.Envelope.Type {
 	case protocol.ClientPing:
 		ping := message.Payload.(*protocol.PingPayload)
@@ -356,6 +384,9 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 			if snapshotErr != nil {
 				return fmt.Errorf("load limit rejection snapshot: %w", snapshotErr)
 			}
+			if err := flushThrough(current.Revision); err != nil {
+				return err
+			}
 			currentHash, _ := current.Hash()
 			return writeServerEnvelope(ctx, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "rejected-" + message.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerOperationRejected}, protocol.OperationRejectedPayload{OperationID: submission.Operation.OperationID, Code: "limit_exceeded", Message: "operation was rejected", Revision: current.Revision, MapHash: currentHash})
 		}
@@ -375,10 +406,16 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 			if snapshotErr != nil {
 				return fmt.Errorf("load rejected snapshot: %w", snapshotErr)
 			}
+			if err := flushThrough(current.Revision); err != nil {
+				return err
+			}
 			currentHash, _ := current.Hash()
 			return writeServerEnvelope(ctx, connection, protocol.ServerEnvelope{ProtocolVersion: model.ProtocolVersion, MessageID: "rejected-" + message.Envelope.MessageID, SessionID: auth.sessionID, Type: protocol.ServerOperationRejected}, protocol.OperationRejectedPayload{OperationID: submission.Operation.OperationID, Code: rejectionCode(err, "operation_rejected"), Message: "operation was rejected", Revision: current.Revision, MapHash: currentHash, AuthoritativeValues: authoritativeValues(current, submission.Operation.Changes)})
 		}
 		if duplicate {
+			if err := flushThrough(accepted.Revision); err != nil {
+				return err
+			}
 			acceptedHash, found, hashErr := service.store.RevisionHash(ctx, accepted.DocumentID, accepted.Revision)
 			if hashErr != nil {
 				return fmt.Errorf("load duplicate hash: %w", hashErr)
@@ -408,6 +445,9 @@ func (service *Service) handleClientMessage(ctx context.Context, connection *web
 			current, snapshotErr := session.owner.Snapshot(ctx)
 			if snapshotErr != nil {
 				return fmt.Errorf("load inverse rejection snapshot: %w", snapshotErr)
+			}
+			if err := flushThrough(current.Revision); err != nil {
+				return err
 			}
 			currentHash, _ := current.Hash()
 			var changes []model.TileChange

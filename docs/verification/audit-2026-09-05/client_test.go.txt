@@ -1,0 +1,55 @@
+package client
+
+import (
+    "context"
+    "testing"
+    "time"
+
+    "sdmm/internal/aphelion/collab/model"
+    "sdmm/internal/aphelion/collab/protocol"
+)
+
+func TestAuditConcurrentSameTileRetainsConflictDraft(t *testing.T) {
+    snapshot := projectionSnapshot(t)
+    local := projectionOperation(t, snapshot, 1)
+    transport := newFakeTransport()
+    network, err := NewNetworkExecutor(transport, snapshot, local.ActorID, "session")
+    if err != nil { t.Fatal(err) }
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    result := make(chan error, 1)
+    go func() { _, err := network.Execute(ctx, local); result <- err }()
+    transport.next(t)
+    remote := model.AcceptedOperation{Operation: projectionOperation(t, snapshot, 1), Revision: 1, AcceptedAt: time.Unix(1, 0)}
+    after := snapshotWithOperation(t, snapshot, remote)
+    hash, err := after.Hash()
+    if err != nil { t.Fatal(err) }
+    receiveErr := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: remote, MapHash: hash}))
+    if receiveErr != nil {
+        current, _ := network.Snapshot(ctx)
+        t.Fatalf("valid remote acceptance failed: %v; acknowledged=%d pending=%t conflicts=%d", receiveErr, current.Revision, network.HasUnacknowledgedOperations(), len(network.Conflicts()))
+    }
+    if err := network.Receive(serverEnvelope(t, protocol.ServerOperationRejected, protocol.OperationRejectedPayload{OperationID: local.OperationID, Code: "precondition_failed", Message: "conflict", Revision: 1, MapHash: hash})); err != nil { t.Fatal(err) }
+    <-result
+    if len(network.Conflicts()) != 1 { t.Fatal("local draft not retained as conflict") }
+}
+
+func TestAuditOlderExactAcceptedDuplicate(t *testing.T) {
+    snapshot := projectionSnapshot(t)
+    actor, err := model.NewActorID()
+    if err != nil { t.Fatal(err) }
+    network, err := NewNetworkExecutor(newFakeTransport(), snapshot, actor, "session")
+    if err != nil { t.Fatal(err) }
+    first := model.AcceptedOperation{Operation: projectionOperation(t, snapshot, 1), Revision: 1, AcceptedAt: time.Unix(1, 0)}
+    afterFirst := snapshotWithOperation(t, snapshot, first)
+    firstHash, err := afterFirst.Hash()
+    if err != nil { t.Fatal(err) }
+    firstEnvelope := serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: first, MapHash: firstHash})
+    if err := network.Receive(firstEnvelope); err != nil { t.Fatal(err) }
+    second := model.AcceptedOperation{Operation: projectionOperation(t, afterFirst, 2), Revision: 2, AcceptedAt: time.Unix(2, 0)}
+    afterSecond := snapshotWithOperation(t, afterFirst, second)
+    secondHash, err := afterSecond.Hash()
+    if err != nil { t.Fatal(err) }
+    if err := network.Receive(serverEnvelope(t, protocol.ServerOperationAccepted, protocol.OperationAcceptedPayload{Operation: second, MapHash: secondHash})); err != nil { t.Fatal(err) }
+    if err := network.Receive(firstEnvelope); err != nil { t.Fatalf("exact duplicate at older revision suspended executor: %v", err) }
+}

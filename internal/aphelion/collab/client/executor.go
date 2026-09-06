@@ -29,14 +29,15 @@ type NetworkExecutor struct {
 	actor     model.ActorID
 	sessionID string
 
-	mutex      sync.Mutex
-	projection Projection
-	pending    map[model.OperationID]chan operationResult
-	accepted   map[model.OperationID]model.AcceptedOperation
-	conflicts  []Conflict
-	updates    chan Projection
-	terminal   error
-	suspended  error
+	mutex          sync.Mutex
+	projection     Projection
+	pending        map[model.OperationID]chan operationResult
+	accepted       map[model.OperationID]model.AcceptedOperation
+	acceptedHashes map[model.OperationID]string
+	conflicts      []Conflict
+	updates        chan Projection
+	terminal       error
+	suspended      error
 }
 
 func NewNetworkExecutor(transport Transport, snapshot model.Snapshot, actor model.ActorID, sessionID string) (*NetworkExecutor, error) {
@@ -53,13 +54,14 @@ func NewNetworkExecutor(transport Transport, snapshot model.Snapshot, actor mode
 		return nil, fmt.Errorf("network executor session id is empty")
 	}
 	return &NetworkExecutor{
-		transport:  transport,
-		actor:      actor,
-		sessionID:  sessionID,
-		projection: NewProjection(snapshot),
-		pending:    make(map[model.OperationID]chan operationResult),
-		accepted:   make(map[model.OperationID]model.AcceptedOperation),
-		updates:    make(chan Projection, 1),
+		transport:      transport,
+		actor:          actor,
+		sessionID:      sessionID,
+		projection:     NewProjection(snapshot),
+		pending:        make(map[model.OperationID]chan operationResult),
+		accepted:       make(map[model.OperationID]model.AcceptedOperation),
+		acceptedHashes: make(map[model.OperationID]string),
+		updates:        make(chan Projection, 1),
 	}, nil
 }
 
@@ -393,8 +395,7 @@ func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) error 
 	case protocol.ServerOperationAccepted:
 		payload := decoded.Payload.(*protocol.OperationAcceptedPayload)
 		if prior, exists := network.accepted[payload.Operation.OperationID]; exists && reflect.DeepEqual(prior, payload.Operation) {
-			acknowledgedHash, hashErr := network.projection.Acknowledged.Hash()
-			if hashErr == nil && payload.Operation.Revision == network.projection.Acknowledged.Revision && payload.MapHash == acknowledgedHash {
+			if payload.MapHash == network.acceptedHashes[payload.Operation.OperationID] {
 				return nil
 			}
 		}
@@ -405,6 +406,7 @@ func (network *NetworkExecutor) Receive(envelope protocol.ServerEnvelope) error 
 		}
 		network.projection = projection
 		network.accepted[payload.Operation.OperationID] = model.CloneAcceptedOperation(payload.Operation)
+		network.acceptedHashes[payload.Operation.OperationID] = payload.MapHash
 		if waiter, exists := network.pending[payload.Operation.OperationID]; exists {
 			delete(network.pending, payload.Operation.OperationID)
 			waiter <- operationResult{accepted: model.CloneAcceptedOperation(payload.Operation)}

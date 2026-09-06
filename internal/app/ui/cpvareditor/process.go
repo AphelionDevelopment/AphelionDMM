@@ -153,6 +153,11 @@ const (
 )
 
 func (v *VarEditor) showVariables() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		imgui.TextDisabled("Type metadata unavailable; explicit values are read-only.")
+	}
+	// APHELION EDIT ADDITION END
 	if v.config().ShowByType {
 		v.showVariablesByType()
 	} else {
@@ -287,6 +292,13 @@ func (v *VarEditor) currentVars() *dmvars.Variables {
 }
 
 func (v *VarEditor) isFilteredVariable(varName string) bool {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		if _, exists := v.currentVars().Value(varName); !exists {
+			return true
+		}
+	}
+	// APHELION EDIT ADDITION END
 	// Show modified only
 	if v.config().ShowModified && v.isCurrentVarInitial(varName) {
 		return true
@@ -296,7 +308,8 @@ func (v *VarEditor) isFilteredVariable(varName string) bool {
 		return true
 	}
 	// Hide tmp, const, and static
-	if !v.config().ShowTmp && v.app.LoadedEnvironment().Objects[v.prefab.Path()].Flags(varName).Any() {
+	// APHELION EDIT CHANGE - COLLABORATION - ORIGINAL: if !v.config().ShowTmp && v.app.LoadedEnvironment().Objects[v.prefab.Path()].Flags(varName).Any() {
+	if object := v.environmentObject(); object != nil && !v.config().ShowTmp && object.Flags(varName).Any() {
 		return true
 	}
 	return false

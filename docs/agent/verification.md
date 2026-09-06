@@ -38,20 +38,34 @@ Then broaden:
 ```powershell
 go test ./... -count=1
 go test -race ./internal/aphelion/...
-rustup run 1.82-x86_64-pc-windows-gnu cargo test --manifest-path third_party/sdmmparser/src/Cargo.toml --locked
-rustup run 1.82-x86_64-pc-windows-gnu cargo fmt --manifest-path third_party/sdmmparser/src/Cargo.toml --all -- --check
-rustup run 1.82-x86_64-pc-windows-gnu cargo clippy --manifest-path third_party/sdmmparser/src/Cargo.toml --all-targets --locked -- -D warnings
+rustup run 1.82.0-x86_64-pc-windows-gnu cargo test --manifest-path third_party/sdmmparser/src/Cargo.toml --locked
+rustup run 1.82.0-x86_64-pc-windows-gnu cargo fmt --manifest-path third_party/sdmmparser/src/Cargo.toml --all -- --check
+rustup run 1.82.0-x86_64-pc-windows-gnu cargo clippy --manifest-path third_party/sdmmparser/src/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
 For the Windows cross-stack build:
 
 ```powershell
-$env:RUST_TARGET = '1.82-x86_64-pc-windows-gnu'
+$env:RUST_TARGET = '1.82.0-x86_64-pc-windows-gnu'
 task task_win:gen_syso
 task build
 ```
 
 Check `$LASTEXITCODE` after every native command. The intended desktop smoke target remains `dst/StrongDMM.exe` until a human-approved branding migration changes it.
+
+The real workspace Save gate needs a working OpenGL context:
+
+```powershell
+$env:APHELIONDMM_GL_TEST = '1'
+go test ./internal/app/ui/cpwsarea/wsmap -run '^TestSaveAcknowledgementBoundaries$' -count=1 -timeout 60s
+Remove-Item Env:APHELIONDMM_GL_TEST
+```
+
+It creates a hidden window and exercises `PaneMap` construction and `WsMap.Save`.
+Its default skip is not desktop evidence, and a successful hidden-context test
+does not replace human interaction testing. PostgreSQL tests also skip unless
+`APHELION_POSTGRES_TEST_DSN` is configured; logical backup/restore additionally
+requires `APHELION_POSTGRES_BIN`. Use disposable test databases.
 
 ## Multiplayer acceptance
 

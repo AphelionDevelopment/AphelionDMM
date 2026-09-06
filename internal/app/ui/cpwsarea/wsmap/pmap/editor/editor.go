@@ -31,13 +31,15 @@ type Editor struct {
 	areasZones []AreaZone
 
 	// APHELION EDIT ADDITION START - COLLABORATION
-	executor           executor.Executor
-	documentID         model.DocumentID
-	actorID            model.ActorID
-	authoritative      model.Snapshot
-	authoritativeTiles map[model.Coord]model.TileState
-	pendingChanges     map[model.Coord]model.TileState
-	collaborationErr   error
+	executor              executor.Executor
+	documentID            model.DocumentID
+	actorID               model.ActorID
+	authoritative         model.Snapshot
+	authoritativeTiles    map[model.Coord]model.TileState
+	pendingChanges        map[model.Coord]model.TileState
+	collaborationErr      error
+	attachmentGeneration  uint64
+	unresolvedSubmissions map[model.OperationID]struct{}
 	// APHELION EDIT ADDITION END
 }
 

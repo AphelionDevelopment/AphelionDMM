@@ -226,7 +226,10 @@ func (w *WsArea) closeWorkspacesGentlyV(wsToClose []*workspace.Workspace, guard 
 
 	dType.ActionYes = func() {
 		for _, ws := range unsavedWorkspaces {
-			ws.Save()
+			// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: ws.Save()
+			if !saveWorkspacesBeforeClose([]*workspace.Workspace{ws}, callback) {
+				return
+			}
 		}
 		if !allowWorkspaceClose(guard, callback) {
 			return
@@ -298,7 +301,10 @@ func (w *WsArea) closeWorkspaceGentlyV(ws *workspace.Workspace, guard func() boo
 
 	dType := makeSaveSingleWorkspaceDialogType(ws)
 	dType.ActionYes = func() {
-		ws.Save()
+		// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: ws.Save()
+		if !saveWorkspacesBeforeClose([]*workspace.Workspace{ws}, callback) {
+			return
+		}
 		if !allowWorkspaceClose(guard, callback) {
 			return
 		}
@@ -466,6 +472,11 @@ func (w *WsArea) switchActiveWorkspace(activeWs *workspace.Workspace) {
 }
 
 func (w *WsArea) isWorkspaceUnsaved(ws *workspace.Workspace) bool {
+	// APHELION EDIT ADDITION START - ATOMIC_SAVE
+	if content, ok := ws.Content().(interface{ HasUnsavedChanges() bool }); ok {
+		return content.HasUnsavedChanges()
+	}
+	// APHELION EDIT ADDITION END
 	return w.app.CommandStorage().IsModified(ws.CommandStackId())
 }
 

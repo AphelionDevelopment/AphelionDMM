@@ -151,11 +151,11 @@ func (store *Store) Append(ctx context.Context, accepted model.AcceptedOperation
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("lookup duplicate operation: %w", err)
 	}
-	snapshot, replay, err := load(ctx, transaction, accepted.DocumentID)
+	state, err := loadRecovery(ctx, transaction, accepted.DocumentID)
 	if err != nil {
 		return err
 	}
-	document, err := replayDocument(snapshot, replay)
+	document, err := state.Restore()
 	if err != nil {
 		return err
 	}
@@ -187,15 +187,20 @@ func (store *Store) Append(ctx context.Context, accepted model.AcceptedOperation
 }
 
 func (store *Store) Load(ctx context.Context, documentID model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
-	store.mutex.RLock()
-	defer store.mutex.RUnlock()
-	if store.closed {
-		return model.Snapshot{}, nil, collabstore.ErrStoreClosed
-	}
-	if err := ctx.Err(); err != nil {
+	state, err := store.LoadRecovery(ctx, documentID)
+	if err != nil {
 		return model.Snapshot{}, nil, err
 	}
-	return load(ctx, store.database, documentID)
+	if _, err := state.Restore(); err != nil {
+		return model.Snapshot{}, nil, err
+	}
+	replay := make([]model.AcceptedOperation, 0)
+	for _, accepted := range state.Operations {
+		if accepted.Revision > state.Snapshot.Revision {
+			replay = append(replay, accepted)
+		}
+	}
+	return model.CloneSnapshot(state.Snapshot), replay, nil
 }
 
 func (store *Store) SaveSnapshot(ctx context.Context, snapshot model.Snapshot) error {
@@ -212,15 +217,15 @@ func (store *Store) SaveSnapshot(ctx context.Context, snapshot model.Snapshot) e
 		return fmt.Errorf("begin snapshot: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
-	base, replay, err := load(ctx, transaction, snapshot.DocumentID)
+	state, err := loadRecovery(ctx, transaction, snapshot.DocumentID)
 	if err != nil {
 		return err
 	}
-	retained, err := replaySnapshotAt(base, replay, snapshot.Revision)
+	retained, err := state.RestoreAt(snapshot.Revision)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(retained, model.CloneSnapshot(snapshot)) {
+	if !reflect.DeepEqual(retained.Snapshot(), model.CloneSnapshot(snapshot)) {
 		return fmt.Errorf("snapshot does not match retained revision")
 	}
 	mapHash, err := snapshot.Hash()
@@ -503,86 +508,6 @@ func (store *Store) Close() error {
 type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
-func load(ctx context.Context, database queryer, documentID model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
-	var snapshotData []byte
-	var snapshotRevision model.Revision
-	err := database.QueryRowContext(ctx, "SELECT snapshot, snapshot_revision FROM documents WHERE document_id = ?", documentID).Scan(&snapshotData, &snapshotRevision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.Snapshot{}, nil, collabstore.ErrSessionMissing
-	}
-	if err != nil {
-		return model.Snapshot{}, nil, fmt.Errorf("load snapshot: %w", err)
-	}
-	var snapshot model.Snapshot
-	if err := json.Unmarshal(snapshotData, &snapshot); err != nil {
-		return model.Snapshot{}, nil, fmt.Errorf("decode snapshot: %w", err)
-	}
-	rows, err := database.QueryContext(ctx, "SELECT accepted FROM operations WHERE document_id = ? AND revision > ? ORDER BY revision", documentID, snapshotRevision)
-	if err != nil {
-		return model.Snapshot{}, nil, fmt.Errorf("query replay: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	operations := make([]model.AcceptedOperation, 0)
-	for rows.Next() {
-		var data []byte
-		if err := rows.Scan(&data); err != nil {
-			return model.Snapshot{}, nil, fmt.Errorf("scan replay: %w", err)
-		}
-		accepted, err := decodeAccepted(data)
-		if err != nil {
-			return model.Snapshot{}, nil, err
-		}
-		operations = append(operations, accepted)
-	}
-	if err := rows.Err(); err != nil {
-		return model.Snapshot{}, nil, fmt.Errorf("iterate replay: %w", err)
-	}
-	return model.CloneSnapshot(snapshot), operations, nil
-}
-
-func replayDocument(snapshot model.Snapshot, operations []model.AcceptedOperation) (*engine.Document, error) {
-	document, err := engine.NewDocument(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("open stored snapshot: %w", err)
-	}
-	for _, accepted := range operations {
-		verified, err := document.Apply(accepted.Operation, accepted.AcceptedAt)
-		if err != nil {
-			return nil, fmt.Errorf("replay revision %d: %w", accepted.Revision, err)
-		}
-		if !reflect.DeepEqual(verified, accepted) {
-			return nil, fmt.Errorf("replay revision %d differs from stored operation", accepted.Revision)
-		}
-	}
-	return document, nil
-}
-
-func replaySnapshotAt(snapshot model.Snapshot, operations []model.AcceptedOperation, revision model.Revision) (model.Snapshot, error) {
-	if revision < snapshot.Revision {
-		return model.Snapshot{}, fmt.Errorf("snapshot revision %d predates retained revision %d", revision, snapshot.Revision)
-	}
-	document, err := engine.NewDocument(snapshot)
-	if err != nil {
-		return model.Snapshot{}, fmt.Errorf("open stored snapshot: %w", err)
-	}
-	if revision == snapshot.Revision {
-		return document.Snapshot(), nil
-	}
-	for _, accepted := range operations {
-		verified, err := document.Apply(accepted.Operation, accepted.AcceptedAt)
-		if err != nil {
-			return model.Snapshot{}, fmt.Errorf("replay revision %d: %w", accepted.Revision, err)
-		}
-		if !reflect.DeepEqual(verified, accepted) {
-			return model.Snapshot{}, fmt.Errorf("replay revision %d differs from stored operation", accepted.Revision)
-		}
-		if accepted.Revision == revision {
-			return document.Snapshot(), nil
-		}
-	}
-	return model.Snapshot{}, fmt.Errorf("snapshot revision %d is not retained", revision)
 }
 
 func decodeAccepted(data []byte) (model.AcceptedOperation, error) {

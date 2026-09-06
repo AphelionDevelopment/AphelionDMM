@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"time"
 
@@ -45,11 +44,15 @@ type response struct {
 }
 
 type DocumentOwner struct {
-	requests  chan request
-	done      chan struct{}
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	snapshots sync.WaitGroup
+	requests           chan request
+	done               chan struct{}
+	cancel             context.CancelFunc
+	closeOnce          sync.Once
+	snapshots          sync.WaitGroup
+	durableMutex       sync.Mutex
+	durableSubscribers map[uint64]chan model.AcceptedOperation
+	nextSubscriberID   uint64
+	durableClosed      bool
 }
 
 func StartDocument(ctx context.Context, snapshot model.Snapshot, store SessionStore) (*DocumentOwner, error) {
@@ -140,6 +143,7 @@ func (owner *DocumentOwner) request(ctx context.Context, value request) (respons
 
 func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, store SessionStore, config DocumentConfig) {
 	defer close(owner.done)
+	defer owner.closeDurable()
 	acceptedSinceSnapshot := 0
 	snapshotInFlight := false
 	snapshotResults := make(chan snapshotResult, 1)
@@ -183,6 +187,7 @@ func (owner *DocumentOwner) run(ctx context.Context, document *engine.Document, 
 					document = accepted.document
 					if !accepted.duplicate {
 						acceptedSinceSnapshot++
+						owner.publishDurable(accepted.operation)
 					}
 				}
 				request.response <- response{accepted: accepted.operation, duplicate: accepted.duplicate, err: err}
@@ -275,7 +280,7 @@ func submit(ctx context.Context, document *engine.Document, store SessionStore, 
 }
 
 func reconcileStoredOperation(ctx context.Context, document *engine.Document, store SessionStore, operation model.Operation, prior model.AcceptedOperation, observability *collabtelemetry.Telemetry) (*engine.Document, error) {
-	if !reflect.DeepEqual(prior.Operation, operation) {
+	if !model.SameOperation(prior.Operation, operation) {
 		return nil, fmt.Errorf("operation %q conflicts with stored revision %d", operation.OperationID, prior.Revision)
 	}
 	current := document.Snapshot()

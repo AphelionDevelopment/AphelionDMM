@@ -1,6 +1,10 @@
 package wsmap
 
 import (
+	// APHELION EDIT ADDITION START - ATOMIC_SAVE
+	"context"
+	"sdmm/internal/aphelion/collab/model"
+	// APHELION EDIT ADDITION END
 	"fmt"
 
 	"sdmm/internal/app/command"
@@ -28,13 +32,26 @@ type WsMap struct {
 	app App
 
 	paneMap *pmap.PaneMap
+	// APHELION EDIT ADDITION START - ATOMIC_SAVE
+	savedMapHash    string
+	savedGeneration uint64
+	savedRevision   model.Revision
+	// APHELION EDIT ADDITION END
 }
 
 func New(app App, dmm *dmmap.Dmm) *WsMap {
-	return &WsMap{
+	// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: return &WsMap{
+	ws := &WsMap{
 		app:     app,
 		paneMap: pmap.New(app, dmm),
 	}
+	// APHELION EDIT ADDITION START - ATOMIC_SAVE
+	if snapshot, err := ws.paneMap.Editor().SaveSnapshot(context.Background()); err == nil {
+		ws.savedMapHash, _ = snapshot.Hash()
+		ws.savedGeneration, ws.savedRevision = ws.paneMap.Editor().SaveVersion()
+	}
+	return ws
+	// APHELION EDIT ADDITION END
 }
 
 func (ws *WsMap) Map() *pmap.PaneMap {
@@ -54,7 +71,8 @@ func (WsMap) Ini() workspace.Ini {
 
 func (ws *WsMap) Name() string {
 	visibleName := ws.paneMap.Dmm().Name
-	if ws.app.CommandStorage().IsModified(ws.CommandStackId()) {
+	// APHELION EDIT CHANGE - ATOMIC_SAVE - ORIGINAL: if ws.app.CommandStorage().IsModified(ws.CommandStackId()) {
+	if ws.app.CommandStorage().IsModified(ws.CommandStackId()) || ws.paneMap.Editor().ChangedSinceSave(ws.savedGeneration, ws.savedRevision) {
 		visibleName = "* " + visibleName
 	}
 	return fmt.Sprint(visibleName, "###workspace_map_", ws.paneMap.Dmm().Path.Absolute)

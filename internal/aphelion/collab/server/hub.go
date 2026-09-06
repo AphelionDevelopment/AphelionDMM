@@ -60,11 +60,9 @@ func (principal Principal) CanEdit() bool {
 func (principal Principal) CanAdminister() bool { return principal.role == RoleOwner }
 
 type hubSession struct {
-	owner              *DocumentOwner
-	presence           *PresenceManager
-	members            map[model.ActorID]Principal
-	durableSubscribers map[uint64]chan model.AcceptedOperation
-	nextSubscriberID   uint64
+	owner    *DocumentOwner
+	presence *PresenceManager
+	members  map[model.ActorID]Principal
 }
 
 type Hub struct {
@@ -98,10 +96,9 @@ func (hub *Hub) Create(sessionID string, owner *DocumentOwner, creator Principal
 		return ErrSessionConflict
 	}
 	hub.sessions[sessionID] = &hubSession{
-		owner:              owner,
-		presence:           NewPresenceManagerWithTelemetry(hub.presenceTimeout, hub.telemetry),
-		members:            map[model.ActorID]Principal{creator.ActorID(): creator},
-		durableSubscribers: make(map[uint64]chan model.AcceptedOperation),
+		owner:    owner,
+		presence: NewPresenceManagerWithTelemetry(hub.presenceTimeout, hub.telemetry),
+		members:  map[model.ActorID]Principal{creator.ActorID(): creator},
 	}
 	return nil
 }
@@ -189,9 +186,6 @@ func (hub *Hub) SubmitWithStatus(ctx context.Context, sessionID string, principa
 	if err != nil {
 		return model.AcceptedOperation{}, false, err
 	}
-	if !duplicate {
-		hub.publishDurable(sessionID, accepted)
-	}
 	return accepted, duplicate, nil
 }
 
@@ -221,12 +215,9 @@ func (hub *Hub) Inverse(ctx context.Context, sessionID string, principal Princip
 	if err != nil {
 		return model.AcceptedOperation{}, err
 	}
-	accepted, duplicate, err := owner.SubmitWithStatus(ctx, operation)
+	accepted, _, err := owner.SubmitWithStatus(ctx, operation)
 	if err != nil {
 		return model.AcceptedOperation{}, err
-	}
-	if !duplicate {
-		hub.publishDurable(sessionID, accepted)
 	}
 	return accepted, nil
 }
@@ -285,43 +276,11 @@ func (hub *Hub) SubscribeDurable(sessionID string, buffer int) (<-chan model.Acc
 	if buffer < 1 {
 		return nil, nil, fmt.Errorf("durable subscriber buffer must be positive")
 	}
-	hub.mutex.Lock()
-	defer hub.mutex.Unlock()
+	hub.mutex.RLock()
 	session, exists := hub.sessions[sessionID]
+	hub.mutex.RUnlock()
 	if !exists {
 		return nil, nil, ErrSessionNotFound
 	}
-	session.nextSubscriberID++
-	id := session.nextSubscriberID
-	updates := make(chan model.AcceptedOperation, buffer)
-	session.durableSubscribers[id] = updates
-	var once sync.Once
-	cancel := func() {
-		once.Do(func() {
-			hub.mutex.Lock()
-			defer hub.mutex.Unlock()
-			if subscriber, exists := session.durableSubscribers[id]; exists {
-				delete(session.durableSubscribers, id)
-				close(subscriber)
-			}
-		})
-	}
-	return updates, cancel, nil
-}
-
-func (hub *Hub) publishDurable(sessionID string, accepted model.AcceptedOperation) {
-	hub.mutex.Lock()
-	defer hub.mutex.Unlock()
-	session, exists := hub.sessions[sessionID]
-	if !exists {
-		return
-	}
-	for id, subscriber := range session.durableSubscribers {
-		select {
-		case subscriber <- model.CloneAcceptedOperation(accepted):
-		default:
-			delete(session.durableSubscribers, id)
-			close(subscriber)
-		}
-	}
+	return session.owner.subscribeDurable(buffer)
 }

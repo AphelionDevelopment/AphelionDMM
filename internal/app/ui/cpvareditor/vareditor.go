@@ -118,8 +118,15 @@ func (v *VarEditor) EditedInstance() (*dmminstance.Instance, bool) {
 func (v *VarEditor) setup(prefab *dmmprefab.Prefab) {
 	v.prefab = prefab
 	v.variablesNames = collectVariablesNames(prefab.Vars())
-	v.variablesPaths = collectVariablesPaths(v.app.LoadedEnvironment().Objects[v.prefab.Path()])
-	v.variablesNamesByPaths = collectVariablesNamesByPaths(v.app.LoadedEnvironment(), v.variablesPaths)
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() != nil {
+		v.variablesPaths = collectVariablesPaths(v.app.LoadedEnvironment().Objects[v.prefab.Path()])
+		v.variablesNamesByPaths = collectVariablesNamesByPaths(v.app.LoadedEnvironment(), v.variablesPaths)
+	} else {
+		v.variablesPaths = []string{prefab.Path()}
+		v.variablesNamesByPaths = map[string][]string{prefab.Path(): append([]string(nil), v.variablesNames...)}
+	}
+	// APHELION EDIT ADDITION END
 
 	// Clear pinned variables from the common list, since they are showed separately.
 	for _, pinnedVarName := range v.config().PinnedVarNames {
@@ -131,6 +138,11 @@ func (v *VarEditor) setup(prefab *dmmprefab.Prefab) {
 }
 
 func (v *VarEditor) setInstanceVariable(varName, varValue string) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if len(varValue) == 0 {
 		varValue = dmvars.NullValue
 	}
@@ -171,6 +183,11 @@ func (v *VarEditor) setInstanceVariable(varName, varValue string) {
 }
 
 func (v *VarEditor) setPrefabVariable(varName, varValue string) {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		return
+	}
+	// APHELION EDIT ADDITION END
 	if len(varValue) == 0 {
 		varValue = dmvars.NullValue
 	}
@@ -209,16 +226,42 @@ func (v *VarEditor) resetSession() {
 }
 
 func (v *VarEditor) initialVarValue(varName string) string {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		return v.currentVars().ValueV(varName, dmvars.NullValue)
+	}
+	// APHELION EDIT ADDITION END
 	return v.app.LoadedEnvironment().Objects[v.prefab.Path()].Vars.ValueV(varName, dmvars.NullValue)
 }
 
 func (v *VarEditor) isReadOnly(varName string) bool {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		return true
+	}
+	// APHELION EDIT ADDITION END
 	return v.app.LoadedEnvironment().Objects[v.prefab.Path()].Flags(varName).ReadOnly()
 }
 
 func (v *VarEditor) isCurrentVarInitial(varName string) bool {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	if v.environmentObject() == nil {
+		return false
+	}
+	// APHELION EDIT ADDITION END
 	return v.currentVars().ValueV(varName, dmvars.NullValue) == v.initialVarValue(varName)
 }
+
+// APHELION EDIT ADDITION START - COLLABORATION
+func (v *VarEditor) environmentObject() *dmenv.Object {
+	environment := v.app.LoadedEnvironment()
+	if environment == nil || v.prefab == nil {
+		return nil
+	}
+	return environment.Objects[v.prefab.Path()]
+}
+
+// APHELION EDIT ADDITION END
 
 func (v *VarEditor) correctVarIssue(varValue string) string {
 	isList, isString := strings.HasPrefix(varValue, "list("), strings.HasPrefix(varValue, `"`)

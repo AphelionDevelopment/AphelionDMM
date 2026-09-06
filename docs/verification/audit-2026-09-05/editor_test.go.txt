@@ -1,0 +1,39 @@
+package editor
+
+import (
+    "testing"
+
+    "sdmm/internal/aphelion/collab/model"
+    "sdmm/internal/app/command"
+    "sdmm/internal/dmapi/dm"
+    "sdmm/internal/dmapi/dmmap"
+    "sdmm/internal/dmapi/dmmap/dmmdata/dmmprefab"
+    "sdmm/internal/dmapi/dmmsnap"
+    "sdmm/internal/dmapi/dmvars"
+)
+
+func TestAuditAcknowledgementPreservesActiveGesture(t *testing.T) {
+    dmmap.PrefabStorage.Free()
+    t.Cleanup(dmmap.PrefabStorage.Free)
+    environment := editorTestEnvironment()
+    mapState := editorTestMap(environment)
+    application := &editorTestApp{commands: command.NewStorage(), environment: environment, paths: dm.NewPathsFilterEmpty(), runLater: make(chan func(), 8)}
+    application.commands.SetStack("test")
+    editor := New(application, &editorTestAttachedMap{snapshot: dmmsnap.New(mapState)}, mapState)
+    if editor.collaborationErr != nil { t.Fatal(editor.collaborationErr) }
+    deferred := newDeferredAsyncExecutor(t, editor.authoritative, editor.actorID)
+    editor.executor = deferred
+    instance := mapState.Tiles[0].Instances()[2]
+    editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "4")))
+    editor.CommitOperation("First Network Change")
+    instance = mapState.Tiles[0].Instances()[2]
+    editor.InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "8")))
+    coord := model.Coord{X: 1, Y: 1, Z: 1}
+    if _, exists := editor.pendingChanges[coord]; !exists { t.Fatal("second gesture was not captured") }
+    // First edit finishes while the next gesture remains open, before its mouse-up commit.
+    deferred.resolve(t)
+    application.runScheduled(t)
+    if _, exists := editor.pendingChanges[coord]; !exists {
+        t.Fatal("acknowledgement of first edit erased active second gesture; its commit now returns without submitting")
+    }
+}

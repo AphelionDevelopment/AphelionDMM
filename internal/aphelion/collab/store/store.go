@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 )
 
@@ -20,6 +21,7 @@ type SessionStore interface {
 	Create(context.Context, model.Snapshot) error
 	Append(context.Context, model.AcceptedOperation) error
 	Load(context.Context, model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error)
+	LoadRecovery(context.Context, model.DocumentID) (engine.RecoveryState, error)
 	SaveSnapshot(context.Context, model.Snapshot) error
 	RevisionHash(context.Context, model.DocumentID, model.Revision) (string, bool, error)
 	LookupOperation(context.Context, model.DocumentID, model.OperationID) (model.AcceptedOperation, bool, error)

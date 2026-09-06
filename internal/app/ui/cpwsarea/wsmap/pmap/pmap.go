@@ -250,6 +250,9 @@ func (p *PaneMap) Process() {
 }
 
 func (p *PaneMap) Dispose() {
+	// APHELION EDIT ADDITION START - COLLABORATION
+	p.editor.Close()
+	// APHELION EDIT ADDITION END
 	if p == lastActivePane {
 		lastActivePane = nil
 	}

@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 	collabstore "sdmm/internal/aphelion/collab/store"
 )
@@ -171,14 +170,14 @@ func (store *Store) appendOnce(ctx context.Context, accepted model.AcceptedOpera
 		}
 		return fmt.Errorf("operation %q conflicts with stored revision %d", accepted.OperationID, prior.Revision)
 	}
-	base, replay, currentRevision, err := load(ctx, transaction, accepted.DocumentID, true)
+	state, err := loadRecovery(ctx, transaction, accepted.DocumentID, true)
 	if err != nil {
 		return err
 	}
-	if accepted.Revision != currentRevision+1 {
-		return fmt.Errorf("accepted revision %d is not contiguous after %d", accepted.Revision, currentRevision)
+	if accepted.Revision != state.HeadRevision+1 {
+		return fmt.Errorf("accepted revision %d is not contiguous after %d", accepted.Revision, state.HeadRevision)
 	}
-	document, err := replayDocument(base, replay)
+	document, err := state.Restore()
 	if err != nil {
 		return err
 	}
@@ -213,13 +212,20 @@ func (store *Store) appendOnce(ctx context.Context, accepted model.AcceptedOpera
 }
 
 func (store *Store) Load(ctx context.Context, documentID model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
-	store.mutex.RLock()
-	defer store.mutex.RUnlock()
-	if store.closed {
-		return model.Snapshot{}, nil, collabstore.ErrStoreClosed
+	state, err := store.LoadRecovery(ctx, documentID)
+	if err != nil {
+		return model.Snapshot{}, nil, err
 	}
-	base, replay, _, err := load(ctx, store.pool, documentID, false)
-	return base, replay, err
+	if _, err := state.Restore(); err != nil {
+		return model.Snapshot{}, nil, err
+	}
+	replay := make([]model.AcceptedOperation, 0)
+	for _, accepted := range state.Operations {
+		if accepted.Revision > state.Snapshot.Revision {
+			replay = append(replay, accepted)
+		}
+	}
+	return model.CloneSnapshot(state.Snapshot), replay, nil
 }
 
 func (store *Store) SaveSnapshot(ctx context.Context, snapshot model.Snapshot) error {
@@ -233,15 +239,15 @@ func (store *Store) SaveSnapshot(ctx context.Context, snapshot model.Snapshot) e
 		return fmt.Errorf("begin PostgreSQL snapshot: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(context.Background()) }()
-	base, replay, _, err := load(ctx, transaction, snapshot.DocumentID, true)
+	state, err := loadRecovery(ctx, transaction, snapshot.DocumentID, true)
 	if err != nil {
 		return err
 	}
-	retained, err := replaySnapshotAt(base, replay, snapshot.Revision)
+	retained, err := state.RestoreAt(snapshot.Revision)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(retained, model.CloneSnapshot(snapshot)) {
+	if !reflect.DeepEqual(retained.Snapshot(), model.CloneSnapshot(snapshot)) {
 		return fmt.Errorf("snapshot does not match retained revision")
 	}
 	mapHash, err := snapshot.Hash()
@@ -497,46 +503,6 @@ func scanExportCheckpoint(row pgx.Row) (model.ExportCheckpoint, bool, error) {
 	return checkpoint, true, nil
 }
 
-func load(ctx context.Context, database queryer, documentID model.DocumentID, lock bool) (model.Snapshot, []model.AcceptedOperation, model.Revision, error) {
-	query := `SELECT snapshot, snapshot_revision, current_revision FROM collaboration_documents WHERE document_id = $1`
-	if lock {
-		query += " FOR UPDATE"
-	}
-	var snapshotData []byte
-	var snapshotRevision, currentRevision int64
-	if err := database.QueryRow(ctx, query, documentID).Scan(&snapshotData, &snapshotRevision, &currentRevision); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return model.Snapshot{}, nil, 0, collabstore.ErrSessionMissing
-		}
-		return model.Snapshot{}, nil, 0, fmt.Errorf("load PostgreSQL snapshot: %w", err)
-	}
-	var snapshot model.Snapshot
-	if err := json.Unmarshal(snapshotData, &snapshot); err != nil {
-		return model.Snapshot{}, nil, 0, fmt.Errorf("decode PostgreSQL snapshot: %w", err)
-	}
-	rows, err := database.Query(ctx, `SELECT accepted FROM collaboration_operations WHERE document_id = $1 AND revision > $2 ORDER BY revision`, documentID, snapshotRevision)
-	if err != nil {
-		return model.Snapshot{}, nil, 0, fmt.Errorf("query PostgreSQL replay: %w", err)
-	}
-	defer rows.Close()
-	replay := make([]model.AcceptedOperation, 0)
-	for rows.Next() {
-		var data []byte
-		if err := rows.Scan(&data); err != nil {
-			return model.Snapshot{}, nil, 0, fmt.Errorf("scan PostgreSQL replay: %w", err)
-		}
-		accepted, err := decodeAccepted(data)
-		if err != nil {
-			return model.Snapshot{}, nil, 0, err
-		}
-		replay = append(replay, accepted)
-	}
-	if err := rows.Err(); err != nil {
-		return model.Snapshot{}, nil, 0, fmt.Errorf("iterate PostgreSQL replay: %w", err)
-	}
-	return model.CloneSnapshot(snapshot), replay, model.Revision(currentRevision), nil
-}
-
 func lookupOperation(ctx context.Context, database queryer, documentID model.DocumentID, operationID model.OperationID) (model.AcceptedOperation, bool, error) {
 	var data []byte
 	err := database.QueryRow(ctx, `SELECT accepted FROM collaboration_operations WHERE document_id = $1 AND operation_id = $2`, documentID, operationID).Scan(&data)
@@ -564,46 +530,6 @@ func missingOrError(err error) error {
 		return err
 	}
 	return collabstore.ErrSessionMissing
-}
-
-func replayDocument(snapshot model.Snapshot, operations []model.AcceptedOperation) (*engine.Document, error) {
-	document, err := engine.NewDocument(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("open PostgreSQL stored snapshot: %w", err)
-	}
-	for _, accepted := range operations {
-		verified, err := document.Apply(accepted.Operation, accepted.AcceptedAt)
-		if err != nil {
-			return nil, fmt.Errorf("replay PostgreSQL revision %d: %w", accepted.Revision, err)
-		}
-		if !reflect.DeepEqual(verified, accepted) {
-			return nil, fmt.Errorf("replay PostgreSQL revision %d differs from stored operation", accepted.Revision)
-		}
-	}
-	return document, nil
-}
-
-func replaySnapshotAt(snapshot model.Snapshot, operations []model.AcceptedOperation, revision model.Revision) (model.Snapshot, error) {
-	if revision < snapshot.Revision {
-		return model.Snapshot{}, fmt.Errorf("snapshot revision %d predates retained revision %d", revision, snapshot.Revision)
-	}
-	document, err := engine.NewDocument(snapshot)
-	if err != nil {
-		return model.Snapshot{}, err
-	}
-	if revision == snapshot.Revision {
-		return document.Snapshot(), nil
-	}
-	for _, accepted := range operations {
-		verified, err := document.Apply(accepted.Operation, accepted.AcceptedAt)
-		if err != nil || !reflect.DeepEqual(verified, accepted) {
-			return model.Snapshot{}, fmt.Errorf("replay PostgreSQL revision %d failed: %w", accepted.Revision, err)
-		}
-		if accepted.Revision == revision {
-			return document.Snapshot(), nil
-		}
-	}
-	return model.Snapshot{}, fmt.Errorf("snapshot revision %d is not retained", revision)
 }
 
 func decodeAccepted(data []byte) (model.AcceptedOperation, error) {

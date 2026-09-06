@@ -127,12 +127,13 @@ func cloneTiles(tiles []model.Tile) []model.Tile {
 
 func (projection Projection) Visible() (model.Snapshot, error) {
 	visible := model.CloneSnapshot(projection.Acknowledged)
-	var err error
 	for _, pending := range projection.Pending {
-		visible, err = applyOperation(visible, pending)
-		if err != nil {
-			return model.Snapshot{}, err
+		next, err := applyOperation(visible, pending)
+		if err == nil {
+			visible = next
 		}
+		// A competing authoritative edit can hide speculation without resolving
+		// its submitted intent. Retain the draft until its ordered response.
 	}
 	visible.Revision = projection.Acknowledged.Revision
 	return visible, nil
@@ -187,21 +188,15 @@ func applyOperation(snapshot model.Snapshot, operation model.Operation) (model.S
 }
 
 func rebasePending(acknowledged model.Snapshot, pending []model.Operation) ([]model.Operation, error) {
-	baseHash, err := acknowledged.Hash()
+	_, err := acknowledged.Hash()
 	if err != nil {
 		return nil, err
 	}
-	visible := model.CloneSnapshot(acknowledged)
 	rebased := make([]model.Operation, 0, len(pending))
 	for _, operation := range pending {
-		operation = model.CloneOperation(operation)
-		operation.BaseRevision = acknowledged.Revision
-		operation.BaseMapHash = baseHash
-		visible, err = applyOperation(visible, operation)
-		if err != nil {
-			return nil, err
-		}
-		rebased = append(rebased, operation)
+		// These operations have already crossed the transport boundary. Their
+		// base and preconditions must stay identical to the original submission.
+		rebased = append(rebased, model.CloneOperation(operation))
 	}
 	return rebased, nil
 }

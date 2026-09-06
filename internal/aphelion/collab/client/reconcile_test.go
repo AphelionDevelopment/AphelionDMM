@@ -91,7 +91,7 @@ func TestProjectionRebasesCompatiblePendingOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Pending) != 1 || projection.Pending[0].BaseRevision != 1 || projection.Pending[0].BaseMapHash != acceptedHash {
+	if len(projection.Pending) != 1 || projection.Pending[0].BaseRevision != pendingOperation.BaseRevision || projection.Pending[0].BaseMapHash != pendingOperation.BaseMapHash {
 		t.Fatalf("rebased pending operation = %#v", projection.Pending)
 	}
 	visible, err := projection.Visible()

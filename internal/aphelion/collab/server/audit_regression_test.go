@@ -1,0 +1,245 @@
+package server
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"sdmm/internal/aphelion/collab/model"
+	sqlitestore "sdmm/internal/aphelion/collab/store/sqlite"
+)
+
+func auditSQLiteOwner(t *testing.T) (context.Context, model.Snapshot, *sqlitestore.Store, *DocumentOwner, string) {
+	t.Helper()
+	ctx := context.Background()
+	snapshot := testSnapshot(t, 3)
+	path := filepath.Join(t.TempDir(), "audit.sqlite")
+	store, err := sqlitestore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	owner, err := StartDocument(ctx, snapshot, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(ctx) })
+	return ctx, snapshot, store, owner, path
+}
+
+func TestAuditSQLiteUndoAcrossSnapshot(t *testing.T) {
+	ctx, snapshot, store, owner, _ := auditSQLiteOwner(t)
+	operation := testOperation(t, snapshot, 1)
+	if _, err := owner.Submit(ctx, operation); err != nil {
+		t.Fatal(err)
+	}
+	current, err := owner.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSnapshot(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	id, err := model.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inverse, err := owner.BuildInverse(ctx, operation.ActorID, operation.OperationID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Submit(ctx, inverse); err != nil {
+		t.Fatalf("safe inverse rejected after snapshot: %v", err)
+	}
+}
+
+func TestAuditSQLiteStaleBaseAcrossSnapshot(t *testing.T) {
+	ctx, snapshot, store, owner, _ := auditSQLiteOwner(t)
+	if _, err := owner.Submit(ctx, testOperation(t, snapshot, 1)); err != nil {
+		t.Fatal(err)
+	}
+	current, err := owner.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSnapshot(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Submit(ctx, testOperation(t, snapshot, 2)); err != nil {
+		t.Fatalf("nonoverlapping edit with authentic retained base rejected after snapshot: %v", err)
+	}
+}
+
+func TestAuditSQLiteSnapshotCanMakeAcknowledgedLogUnrecoverable(t *testing.T) {
+	ctx, snapshot, store, owner, _ := auditSQLiteOwner(t)
+	if _, err := owner.Submit(ctx, testOperation(t, snapshot, 1)); err != nil {
+		t.Fatal(err)
+	}
+	atOne, err := owner.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Submit(ctx, testOperation(t, snapshot, 2)); err != nil {
+		t.Fatal(err)
+	}
+	// Models the asynchronous snapshot worker publishing revision 1 after revision 2 was acknowledged.
+	if err := store.SaveSnapshot(ctx, atOne); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := RecoverDocument(ctx, snapshot.DocumentID, store)
+	if err != nil {
+		t.Fatalf("acknowledged revision 2 cannot recover after snapshot at 1: %v", err)
+	}
+	_ = recovered.Close(ctx)
+}
+
+func TestAuditSQLiteRecoveryChecksStoredHash(t *testing.T) {
+	ctx, snapshot, store, owner, path := auditSQLiteOwner(t)
+	if err := owner.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate structurally valid storage corruption without updating stored integrity metadata.
+	changed := model.CloneSnapshot(snapshot)
+	changed.MaxX++
+	encoded, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if _, err := database.ExecContext(ctx, "UPDATE documents SET snapshot = ? WHERE document_id = ?", encoded, snapshot.DocumentID); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := RecoverDocument(ctx, snapshot.DocumentID, store)
+	if err == nil {
+		actual, readErr := recovered.Snapshot(ctx)
+		_ = recovered.Close(ctx)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("corrupt snapshot served: max_x=%d, retained max_x=%d; stored hash was not checked", actual.MaxX, snapshot.MaxX)
+	}
+}
+
+func TestAuditDuplicateUnsortedOperation(t *testing.T) {
+	ctx := context.Background()
+	snapshot := testSnapshot(t, 2)
+	owner, err := StartDocument(ctx, snapshot, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Close(ctx) }()
+	operation := testOperation(t, snapshot, 2)
+	operation.Changes = append(operation.Changes, testOperation(t, snapshot, 1).Changes[0])
+	first, err := owner.Submit(ctx, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, duplicate, err := owner.SubmitWithStatus(ctx, operation)
+	if err != nil {
+		t.Fatalf("identical retry of accepted unsorted operation rejected: %v", err)
+	}
+	if !duplicate || second.Revision != first.Revision {
+		t.Fatal("retry did not return original result")
+	}
+}
+
+func TestAuditHubBroadcastsInRevisionOrder(t *testing.T) {
+	// A bounded scheduler-sensitive probe: compare arrival order, never sort it.
+	for round := 0; round < 10; round++ {
+		ctx := context.Background()
+		snapshot := testSnapshot(t, 1)
+		owner, err := StartDocument(ctx, snapshot, NewMemoryStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		principal := testPrincipal(t, "Owner", RoleOwner)
+		hub := NewHub(time.Minute)
+		if err := hub.Create("audit", owner, principal); err != nil {
+			t.Fatal(err)
+		}
+		const count = 128
+		events, cancel, err := hub.SubscribeDurable("audit", count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operations := make([]model.Operation, count)
+		for i := range operations {
+			operations[i] = testOperation(t, snapshot, 1)
+			operations[i].Changes[0].After = model.TileState{}
+		}
+		var workers sync.WaitGroup
+		start := make(chan struct{})
+		failures := make(chan error, count)
+		for _, operation := range operations {
+			workers.Add(1)
+			go func(operation model.Operation) {
+				defer workers.Done()
+				<-start
+				_, err := hub.Submit(ctx, "audit", principal, operation)
+				if err != nil {
+					failures <- err
+				}
+			}(operation)
+		}
+		close(start)
+		workers.Wait()
+		close(failures)
+		for err := range failures {
+			t.Error(err)
+		}
+		cancel()
+		_ = owner.Close(ctx)
+		want := model.Revision(1)
+		for accepted := range events {
+			if accepted.Revision != want {
+				t.Fatalf("round %d: broadcast revision=%d, want=%d (arrival order)", round, accepted.Revision, want)
+			}
+			want++
+		}
+		if want != count+1 {
+			t.Fatalf("received %d events, want %d", want-1, count)
+		}
+	}
+}
+
+func TestAuditOwnerPublishesBeforeResponding(t *testing.T) {
+	ctx := context.Background()
+	snapshot := testSnapshot(t, 1)
+	owner, err := StartDocument(ctx, snapshot, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Close(ctx) }()
+	hub := NewHub(time.Minute)
+	if err := hub.Create("ordered", owner, testPrincipal(t, "Owner", RoleOwner)); err != nil {
+		t.Fatal(err)
+	}
+	events, cancel, err := hub.SubscribeDurable("ordered", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	accepted, err := owner.Submit(ctx, testOperation(t, snapshot, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		if event.OperationID != accepted.OperationID || event.Revision != 1 {
+			t.Fatal("incorrect published operation")
+		}
+	default:
+		t.Fatal("owner returned before publication; caller scheduling can reorder events")
+	}
+}

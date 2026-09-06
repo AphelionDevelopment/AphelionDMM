@@ -1,0 +1,200 @@
+package wsmap
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/SpaiR/imgui-go"
+	"github.com/go-gl/gl/v3.3-core/gl"
+	"github.com/go-gl/glfw/v3.3/glfw"
+	"sdmm/internal/aphelion/collab/engine"
+	"sdmm/internal/aphelion/collab/executor"
+	"sdmm/internal/aphelion/collab/model"
+	"sdmm/internal/app/command"
+	"sdmm/internal/app/config"
+	"sdmm/internal/app/prefs"
+	"sdmm/internal/dmapi/dm"
+	"sdmm/internal/dmapi/dmenv"
+	"sdmm/internal/dmapi/dmmap"
+	"sdmm/internal/dmapi/dmmap/dmmdata"
+	"sdmm/internal/dmapi/dmmap/dmmdata/dmmprefab"
+	"sdmm/internal/dmapi/dmvars"
+)
+
+// This gate exercises the real PaneMap constructor and WsMap.Save with a
+// hidden OpenGL context. Headless CI must report it as unrun, not as GUI proof.
+func TestSaveAcknowledgementBoundaries(t *testing.T) {
+	if os.Getenv("APHELIONDMM_GL_TEST") != "1" {
+		t.Skip("set APHELIONDMM_GL_TEST=1 for the real hidden-context workspace save gate")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := glfw.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer glfw.Terminate()
+	glfw.WindowHint(glfw.Visible, glfw.False)
+	glfw.WindowHint(glfw.ContextVersionMajor, 3)
+	glfw.WindowHint(glfw.ContextVersionMinor, 3)
+	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
+	window, err := glfw.CreateWindow(64, 64, "Workspace save verification", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer window.Destroy()
+	window.MakeContextCurrent()
+	if err := gl.Init(); err != nil {
+		t.Fatal(err)
+	}
+	imguiContext := imgui.CreateContext(nil)
+	defer imguiContext.Destroy()
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "map.dmm")
+	backup := filepath.Join(directory, "backup.dmm")
+	original := []byte("\"a\" = (/area/foo,/turf/foo,/obj/foo{dir = 2})\n(1,1,1) = {\"\na\n\"}\n")
+	for _, target := range []string{path, backup} {
+		if err := os.WriteFile(target, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objects := make(map[string]*dmenv.Object)
+	for _, objectPath := range []string{"/world", "/area/foo", "/turf/foo", "/obj/foo"} {
+		variables := &dmvars.MutableVariables{}
+		variables.Put("dir", "2")
+		if objectPath == "/world" {
+			variables.Put("area", "/area/foo")
+			variables.Put("turf", "/turf/foo")
+			variables.Put("icon_size", "32")
+		}
+		objects[objectPath] = &dmenv.Object{Path: objectPath, Vars: variables.ToImmutable()}
+	}
+	environment := &dmenv.Dme{RootDir: directory, Objects: objects}
+	dmmap.PrefabStorage.Free()
+	defer dmmap.PrefabStorage.Free()
+	dmmap.Init(environment)
+	defer dmmap.Free()
+	data, err := dmmdata.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapState, _ := dmmap.New(environment, data, backup)
+	app := &saveTestApp{environment: environment, commands: command.NewStorage(), jobs: make(chan func(), 16)}
+	app.commands.SetStack(path)
+	ws := New(app, mapState)
+	initial, err := ws.Map().Editor().CollaborationSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := engine.NewDocument(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, err := model.NewActorID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := executor.NewLocal(document, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delayed := &saveDelayedExecutor{Local: local}
+	if err := ws.Map().Editor().AttachCollaborationExecutor(delayed); err != nil {
+		t.Fatal(err)
+	}
+	instance := mapState.Tiles[0].Instances()[2]
+	ws.Map().Editor().InstanceReplace(instance, dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "4")))
+	ws.Map().Editor().CommitOperation("Save verification edit")
+	if ws.Save() {
+		t.Fatal("Save accepted an unacknowledged operation")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("pending save changed original: %v", err)
+	}
+	// Error presentation is queued; consume it without opening a modal dialog.
+	select {
+	case <-app.jobs:
+	default:
+	}
+	accepted, err := delayed.Execute(context.Background(), delayed.operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delayed.complete(accepted, nil)
+	(<-app.jobs)()
+	// A stale display must not override the acknowledged snapshot being saved.
+	instance = mapState.Tiles[0].Instances()[2]
+	instance.SetPrefab(dmmprefab.New(dmmprefab.IdNone, instance.Prefab().Path(), dmvars.Set(instance.Prefab().Vars(), "dir", "8")))
+	if !ws.Save() {
+		t.Fatal("acknowledged save failed")
+	}
+	saved, err := dmmdata.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, prefabs := range saved.Dictionary {
+		for _, prefab := range prefabs {
+			if prefab.Path() == "/obj/foo" {
+				found = true
+			}
+			if prefab.Path() == "/obj/foo" && prefab.Vars().ValueV("dir", "") != "4" {
+				t.Fatal("saved speculative display instead of acknowledged contents")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("saved map dropped the edited prefab")
+	}
+	if app.commands.IsModified(path) {
+		t.Fatal("successful save did not balance commands")
+	}
+	app.commands.Push(command.Make("Unsaved verification edit", func() {}, func() {}))
+	mapState.Backup = filepath.Join(directory, "missing-backup.dmm")
+	beforeFailure, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Save() {
+		t.Fatal("failed staging reported success")
+	}
+	afterFailure, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(beforeFailure, afterFailure) || !app.commands.IsModified(path) {
+		t.Fatal("failed save changed file or dirty state")
+	}
+}
+
+type saveTestApp struct {
+	App
+	environment *dmenv.Dme
+	commands    *command.Storage
+	jobs        chan func()
+}
+
+func (app *saveTestApp) LoadedEnvironment() *dmenv.Dme    { return app.environment }
+func (app *saveTestApp) CommandStorage() *command.Storage { return app.commands }
+func (app *saveTestApp) Prefs() prefs.Prefs {
+	return prefs.Prefs{Editor: prefs.Editor{SaveFormat: prefs.SaveFormatDMM}}
+}
+func (app *saveTestApp) PathsFilter() *dm.PathsFilter            { return dm.NewPathsFilterEmpty() }
+func (app *saveTestApp) RunLater(job func())                     { app.jobs <- job }
+func (*saveTestApp) ConfigRegister(config.Config)                {}
+func (*saveTestApp) AddMouseChangeCallback(func(uint, uint)) int { return 0 }
+func (*saveTestApp) SyncPrefabs()                                {}
+func (*saveTestApp) SyncVarEditor()                              {}
+
+type saveDelayedExecutor struct {
+	*executor.Local
+	operation model.Operation
+	complete  func(model.AcceptedOperation, error)
+}
+
+func (delayed *saveDelayedExecutor) ExecuteAsync(_ context.Context, operation model.Operation, complete func(model.AcceptedOperation, error)) error {
+	delayed.operation, delayed.complete = model.CloneOperation(operation), complete
+	return nil
+}

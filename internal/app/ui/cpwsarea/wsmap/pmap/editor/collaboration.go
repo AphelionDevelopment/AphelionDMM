@@ -18,6 +18,7 @@ import (
 )
 
 func (e *Editor) initializeCollaboration() {
+	e.resetAttachment()
 	if e.documentID == "" {
 		documentID, err := model.NewDocumentID()
 		if err != nil {
@@ -108,6 +109,7 @@ func (e *Editor) AttachCollaborationExecutor(execution executor.Executor) error 
 	if err := mapadapter.ApplyWithEnvironment(e.dmm, snapshot, e.app.LoadedEnvironment()); err != nil {
 		return fmt.Errorf("attach collaboration executor: %w", err)
 	}
+	e.resetAttachment()
 	e.executor = execution
 	e.documentID = snapshot.DocumentID
 	e.setAuthoritative(snapshot)
@@ -138,6 +140,7 @@ func (e *Editor) DetachCollaborationExecutor(ctx context.Context) error {
 	if err := mapadapter.ApplyWithEnvironment(e.dmm, snapshot, e.app.LoadedEnvironment()); err != nil {
 		return fmt.Errorf("detach collaboration executor: %w", err)
 	}
+	e.resetAttachment()
 	e.executor = local
 	e.setAuthoritative(snapshot)
 	e.refreshCollaborationView(e.pMap.ActiveLevel(), nil, snapshot)
@@ -276,9 +279,18 @@ func (e *Editor) commitOperation(commitMessage string) {
 }
 
 func (e *Editor) submitOperation(execution executor.Executor, operation model.Operation, accepted func(model.AcceptedOperation)) {
+	generation := e.attachmentGeneration
 	if asynchronous, ok := execution.(executor.AsyncExecutor); ok {
+		e.unresolvedSubmissions[operation.OperationID] = struct{}{}
 		err := asynchronous.ExecuteAsync(context.Background(), operation, func(result model.AcceptedOperation, executeErr error) {
 			e.app.RunLater(func() {
+				if generation != e.attachmentGeneration {
+					return
+				}
+				if _, pending := e.unresolvedSubmissions[operation.OperationID]; !pending {
+					return
+				}
+				delete(e.unresolvedSubmissions, operation.OperationID)
 				if executeErr != nil {
 					e.rejectSpeculation(execution, executeErr)
 					return
@@ -287,6 +299,7 @@ func (e *Editor) submitOperation(execution executor.Executor, operation model.Op
 			})
 		})
 		if err != nil {
+			delete(e.unresolvedSubmissions, operation.OperationID)
 			e.rejectSpeculation(execution, err)
 		}
 		return
@@ -301,7 +314,12 @@ func (e *Editor) submitOperation(execution executor.Executor, operation model.Op
 
 func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage string, accepted model.AcceptedOperation, acceptedChanges []model.TileChange, activeLevel int, coords []model.Coord) {
 	forwardID := accepted.OperationID
+	generation := e.attachmentGeneration
 	e.app.CommandStorage().Push(command.MakeAsync(commitMessage, func(complete func(error)) {
+		if generation != e.attachmentGeneration {
+			complete(fmt.Errorf("editor attachment changed"))
+			return
+		}
 		inverse, inverseErr := execution.BuildInverse(context.Background(), forwardID)
 		if inverseErr != nil {
 			e.reportCollaborationError("Unable to undo map change", inverseErr)
@@ -318,6 +336,10 @@ func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage 
 			complete(nil)
 		})
 	}, func(complete func(error)) {
+		if generation != e.attachmentGeneration {
+			complete(fmt.Errorf("editor attachment changed"))
+			return
+		}
 		current, redoErr := execution.Snapshot(context.Background())
 		if redoErr != nil {
 			e.reportCollaborationError("Unable to redo map change", redoErr)
@@ -344,13 +366,21 @@ func (e *Editor) pushAcceptedCommand(execution executor.Executor, commitMessage 
 }
 
 func (e *Editor) executeHistoryOperation(execution executor.Executor, operation model.Operation, complete func(model.AcceptedOperation, error)) {
+	generation := e.attachmentGeneration
 	if asynchronous, ok := execution.(executor.AsyncExecutor); ok {
+		e.unresolvedSubmissions[operation.OperationID] = struct{}{}
 		err := asynchronous.ExecuteAsync(context.Background(), operation, func(result model.AcceptedOperation, executeErr error) {
 			e.app.RunLater(func() {
+				if generation != e.attachmentGeneration {
+					complete(model.AcceptedOperation{}, fmt.Errorf("editor attachment changed"))
+					return
+				}
+				delete(e.unresolvedSubmissions, operation.OperationID)
 				complete(result, executeErr)
 			})
 		})
 		if err != nil {
+			delete(e.unresolvedSubmissions, operation.OperationID)
 			complete(model.AcceptedOperation{}, err)
 		}
 		return
@@ -382,7 +412,6 @@ func (e *Editor) forwardOperation(snapshot model.Snapshot, changes []model.TileC
 }
 
 func (e *Editor) rejectSpeculation(execution executor.Executor, cause error) {
-	e.pendingChanges = make(map[model.Coord]model.TileState)
 	e.syncFromExecutor(execution, true, e.pMap.ActiveLevel(), nil)
 	e.reportCollaborationError("Unable to apply map change", cause)
 }
@@ -393,13 +422,12 @@ func (e *Editor) syncFromExecutor(execution executor.Executor, apply bool, activ
 		e.reportCollaborationError("Unable to synchronize map", err)
 		return
 	}
-	if apply {
+	if apply && len(e.pendingChanges) == 0 {
 		if err := mapadapter.ApplyWithEnvironment(e.dmm, snapshot, e.app.LoadedEnvironment()); err != nil {
 			e.reportCollaborationError("Unable to synchronize map", err)
 			return
 		}
 	}
-	e.executor = execution
 	e.setAuthoritative(snapshot)
 	e.refreshCollaborationView(activeLevel, coords, snapshot)
 }
@@ -428,7 +456,44 @@ func (e *Editor) setAuthoritative(snapshot model.Snapshot) {
 	for _, tile := range snapshot.Tiles {
 		e.authoritativeTiles[tile.Coord] = model.CloneTileState(tile.State)
 	}
+}
+
+func (e *Editor) resetAttachment() {
+	e.attachmentGeneration++
 	e.pendingChanges = make(map[model.Coord]model.TileState)
+	e.unresolvedSubmissions = make(map[model.OperationID]struct{})
+}
+
+// Close fences queued UI completions before the pane releases its resources.
+func (e *Editor) Close() {
+	e.resetAttachment()
+	e.executor = nil
+}
+
+// SaveSnapshot captures authority only after gesture capture, async dispatch,
+// and acknowledgement callbacks have completed on the UI thread.
+func (e *Editor) SaveSnapshot(ctx context.Context) (model.Snapshot, error) {
+	if e.collaborationErr != nil {
+		return model.Snapshot{}, e.collaborationErr
+	}
+	if len(e.unresolvedSubmissions) != 0 {
+		return model.Snapshot{}, fmt.Errorf("map changes are awaiting completion")
+	}
+	if pending, ok := e.executor.(pendingExecutor); ok && pending.HasUnacknowledgedOperations() {
+		return model.Snapshot{}, fmt.Errorf("map changes are awaiting acknowledgement")
+	}
+	return e.CollaborationSnapshot(ctx)
+}
+
+// SaveVersion and ChangedSinceSave are UI-thread version checks for tab labels.
+// Close and Save still read the executor snapshot, including queued remote edits.
+func (e *Editor) SaveVersion() (uint64, model.Revision) {
+	return e.attachmentGeneration, e.authoritative.Revision
+}
+
+func (e *Editor) ChangedSinceSave(generation uint64, revision model.Revision) bool {
+	return generation != e.attachmentGeneration || revision != e.authoritative.Revision ||
+		len(e.pendingChanges) != 0 || len(e.unresolvedSubmissions) != 0 || e.collaborationErr != nil
 }
 
 func (e *Editor) reportCollaborationError(message string, err error) {

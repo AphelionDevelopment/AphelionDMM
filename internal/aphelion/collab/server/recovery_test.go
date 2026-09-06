@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"sdmm/internal/aphelion/collab/engine"
 	"sdmm/internal/aphelion/collab/model"
 	collabstore "sdmm/internal/aphelion/collab/store"
 )
@@ -304,6 +305,14 @@ func (store *recoveryStore) LookupOperation(context.Context, model.DocumentID, m
 }
 func (store *recoveryStore) Load(context.Context, model.DocumentID) (model.Snapshot, []model.AcceptedOperation, error) {
 	return model.CloneSnapshot(store.snapshot), append([]model.AcceptedOperation(nil), store.operations...), nil
+}
+func (store *recoveryStore) LoadRecovery(context.Context, model.DocumentID) (engine.RecoveryState, error) {
+	hash, _ := store.snapshot.Hash() // These fixtures intentionally supply corrupt recovery data.
+	head := store.snapshot.Revision
+	if len(store.operations) > 0 {
+		head = store.operations[len(store.operations)-1].Revision
+	}
+	return engine.RecoveryState{Snapshot: store.snapshot, SnapshotHash: hash, Operations: store.operations, Hashes: map[model.Revision]string{store.snapshot.Revision: hash}, HeadRevision: head, HeadHash: hash}, nil
 }
 func (store *recoveryStore) CreateExportCheckpoint(context.Context, model.ExportCheckpoint) (model.ExportCheckpoint, bool, error) {
 	return model.ExportCheckpoint{}, false, errors.New("export checkpoints are unavailable in recovery fixture")
